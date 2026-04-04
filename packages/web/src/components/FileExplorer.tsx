@@ -201,13 +201,24 @@ export default function FileExplorer({
               className="flex items-center gap-2 px-3 py-1.5 hover:bg-slate-800/70 border-b border-slate-800/30 group"
             >
               {entry.isDirectory ? (
-                <button
-                  onClick={() => navigateTo(entry.name)}
-                  className="flex-1 flex items-center gap-2 text-sm text-left min-w-0"
-                >
-                  <span className="text-yellow-400 flex-shrink-0">&#128193;</span>
-                  <span className="truncate text-slate-200">{entry.name}</span>
-                </button>
+                <>
+                  <button
+                    onClick={() => navigateTo(entry.name)}
+                    className="flex-1 flex items-center gap-2 text-sm text-left min-w-0"
+                  >
+                    <span className="text-yellow-400 flex-shrink-0">&#128193;</span>
+                    <span className="truncate text-slate-200">
+                      {copiedName === entry.name ? 'Copied!' : entry.name}
+                    </span>
+                  </button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); copyPath(entry.name); }}
+                    className="text-xs px-1.5 py-0.5 bg-slate-700 hover:bg-blue-600 rounded opacity-60 group-hover:opacity-100 transition-opacity flex-shrink-0"
+                    title="Copy path"
+                  >
+                    &#128203;
+                  </button>
+                </>
               ) : (
                 <button
                   onClick={() => copyPath(entry.name)}
