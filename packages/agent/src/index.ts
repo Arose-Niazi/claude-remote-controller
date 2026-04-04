@@ -57,7 +57,7 @@ const socket = io(config.serverUrl + '/agent', {
 
 socket.on('connect', () => {
   logger.info('Connected to server');
-  socket.emit(AGENT_HEARTBEAT, buildHeartbeat());
+  socket.emit(AGENT_HEARTBEAT, buildHeartbeat(config.homeDir));
 });
 
 socket.on('connect_error', (err) => {
@@ -73,7 +73,7 @@ socket.on('disconnect', (reason) => {
 // --- Heartbeat loop ---
 setInterval(() => {
   if (socket.connected) {
-    socket.emit(AGENT_HEARTBEAT, buildHeartbeat());
+    socket.emit(AGENT_HEARTBEAT, buildHeartbeat(config.homeDir));
   }
 }, HEARTBEAT_INTERVAL);
 

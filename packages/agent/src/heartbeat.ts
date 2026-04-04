@@ -33,7 +33,7 @@ function getRootPaths(): string[] {
   return ['/'];
 }
 
-export function buildHeartbeat(): HeartbeatPayload {
+export function buildHeartbeat(homeDir?: string): HeartbeatPayload {
   const totalMem = os.totalmem();
   const freeMem = os.freemem();
 
@@ -46,7 +46,7 @@ export function buildHeartbeat(): HeartbeatPayload {
     uptime: Math.round(os.uptime()),
     activeSessions: getActiveSessionCount(),
     pathSeparator: path.sep as '\\' | '/',
-    homeDirectory: os.homedir(),
+    homeDirectory: homeDir || os.homedir(),
     rootPaths: getRootPaths(),
     capabilities: { terminal: true, fileTransfer: false },
   };
