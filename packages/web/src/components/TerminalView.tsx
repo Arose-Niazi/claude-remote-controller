@@ -40,7 +40,9 @@ export default function TerminalView({ socket }: TerminalViewProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const agent = agents.find((a) => a.id === agentId);
-  const initialPath = agent?.homeDirectory || '/';
+  // Use agent's homeDirectory from heartbeat (which already respects homeDir config)
+  // Fall back to root paths or / if heartbeat hasn't arrived yet
+  const initialPath = agent?.homeDirectory || agent?.rootPaths?.[0] || '/';
 
   const {
     sessionId,
@@ -138,16 +140,6 @@ export default function TerminalView({ socket }: TerminalViewProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Refit terminal when file explorer toggles
-  useEffect(() => {
-    setTimeout(() => {
-      fitAddonRef.current?.fit();
-      if (termRef.current) {
-        resize(termRef.current.cols, termRef.current.rows);
-      }
-    }, 50);
-  }, [showFiles, resize]);
-
   // Wire up terminal output
   useEffect(() => {
     if (!socket || !termRef.current) return;
@@ -243,55 +235,55 @@ export default function TerminalView({ socket }: TerminalViewProps) {
         onChange={handleUpload}
       />
 
-      {/* Toolbar */}
-      <div className="flex items-center justify-between px-3 py-2 bg-slate-800 border-b border-slate-700">
+      {/* Toolbar — single line, scrollable on small screens */}
+      <div className="flex items-center gap-2 px-2 py-1.5 bg-slate-800 border-b border-slate-700 overflow-x-auto flex-shrink-0">
         <button
           onClick={handleDetach}
-          className="px-3 py-1 text-sm bg-slate-700 hover:bg-slate-600 rounded transition-colors"
+          className="px-2 py-1 text-xs bg-slate-700 hover:bg-slate-600 rounded transition-colors whitespace-nowrap flex-shrink-0"
         >
-          ← Back
+          ←
         </button>
-        <span className="text-sm text-slate-300 font-medium">{agentId}</span>
-        <div className="flex gap-1.5">
+        <span className="text-xs text-slate-400 truncate min-w-0">{agentId}</span>
+        <div className="flex gap-1 ml-auto flex-shrink-0">
           <button
             onClick={handleCopy}
-            className="px-2 py-1 text-sm bg-slate-700 hover:bg-slate-600 text-slate-300 rounded transition-colors"
+            className="px-2 py-1 text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 rounded transition-colors whitespace-nowrap"
           >
             {copyLabel}
           </button>
           <button
             onClick={() => setShowFiles((p) => !p)}
-            className={`px-2 py-1 text-sm rounded transition-colors ${
+            className={`px-2 py-1 text-xs rounded transition-colors whitespace-nowrap ${
               showFiles
                 ? 'bg-blue-600 text-white'
                 : 'bg-slate-700 hover:bg-slate-600 text-slate-300'
             }`}
-            title="File explorer"
           >
-            &#128193;
+            Files
           </button>
           <button
             onClick={() => fileInputRef.current?.click()}
             disabled={uploading}
-            className="px-2 py-1 text-sm bg-slate-700 hover:bg-slate-600 text-slate-300 rounded transition-colors disabled:opacity-50"
+            className="px-2 py-1 text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 rounded transition-colors disabled:opacity-50 whitespace-nowrap"
           >
-            {uploading ? '...' : 'Upload'}
+            {uploading ? '...' : 'Up'}
           </button>
           <button
             onClick={handleKill}
-            className="px-2 py-1 text-sm bg-red-900/60 hover:bg-red-800 text-red-300 rounded transition-colors"
+            className="px-2 py-1 text-xs bg-red-900/60 hover:bg-red-800 text-red-300 rounded transition-colors whitespace-nowrap"
           >
             Kill
           </button>
         </div>
       </div>
 
-      {/* Main area: terminal + optional file explorer */}
-      <div className="flex flex-1 overflow-hidden">
-        <div ref={termContainerRef} className="flex-1 overflow-hidden" />
+      {/* Main area: terminal (always full width) */}
+      <div className="flex-1 overflow-hidden relative">
+        <div ref={termContainerRef} className="absolute inset-0" />
 
+        {/* File explorer: full-screen overlay on mobile, side panel on desktop */}
         {showFiles && (
-          <div className="w-72 md:w-80 flex-shrink-0">
+          <div className="absolute inset-0 md:left-auto md:w-80 z-10">
             <FileExplorer
               socket={socket}
               agentId={agentId || ''}
