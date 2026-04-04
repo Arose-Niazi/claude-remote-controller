@@ -72,9 +72,11 @@ export default function TerminalView({ socket }: TerminalViewProps) {
   useEffect(() => {
     if (!termContainerRef.current) return;
 
+    // Smaller font on mobile to get ~80 columns on a phone screen
+    const isMobile = window.innerWidth < 768;
     const term = new Terminal({
       cursorBlink: true,
-      fontSize: 14,
+      fontSize: isMobile ? 11 : 14,
       fontFamily: 'Menlo, Monaco, "Cascadia Code", monospace',
       theme: {
         background: '#0f172a',
