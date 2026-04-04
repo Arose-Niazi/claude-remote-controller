@@ -1,0 +1,20 @@
+{
+  "name": "claude-remote-controller",
+  "private": true,
+  "workspaces": [
+    "packages/shared",
+    "packages/server",
+    "packages/agent",
+    "packages/web"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace=packages/shared && npm run build --workspace=packages/server && npm run build --workspace=packages/web",
+    "build:shared": "npm run build --workspace=packages/shared",
+    "build:server": "npm run build --workspace=packages/server",
+    "build:agent": "npm run build --workspace=packages/agent",
+    "build:web": "npm run build --workspace=packages/web",
+    "dev:server": "npm run dev --workspace=packages/server",
+    "dev:agent": "npm run dev --workspace=packages/agent",
+    "dev:web": "npm run dev --workspace=packages/web"
+  }
+}
