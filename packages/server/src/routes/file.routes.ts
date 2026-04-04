@@ -1,23 +1,28 @@
 import { Router } from 'express';
 import { storeUpload, storeReceive, getFileByToken, getPendingReceives } from '../file-store.js';
-import { verifyToken } from '../auth.js';
+import { verifyToken, validateAgentAuth } from '../auth.js';
 import { FILE_MAX_SIZE } from '@crc/shared';
 
 const router = Router();
 
-// Auth middleware for file routes (except signed download)
+// Auth middleware — allows Bearer token OR agent X-Agent-Id/X-Agent-Secret headers
 function authMiddleware(req: any, res: any, next: any): void {
   if (req.path.startsWith('/d/')) return next();
+
+  // Try Bearer token first
   const auth = req.headers.authorization;
-  if (!auth?.startsWith('Bearer ')) {
-    res.status(401).json({ error: 'Missing token' });
-    return;
+  if (auth?.startsWith('Bearer ') && verifyToken(auth.slice(7))) {
+    return next();
   }
-  if (!verifyToken(auth.slice(7))) {
-    res.status(401).json({ error: 'Invalid token' });
-    return;
+
+  // Try agent auth (for file-explorer downloads)
+  const agentId = req.headers['x-agent-id'] as string;
+  const agentSecret = req.headers['x-agent-secret'] as string;
+  if (agentId && agentSecret && validateAgentAuth(agentId, agentSecret)) {
+    return next();
   }
-  next();
+
+  res.status(401).json({ error: 'Unauthorized' });
 }
 
 router.use(authMiddleware);

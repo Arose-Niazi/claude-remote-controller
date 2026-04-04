@@ -50,6 +50,15 @@ export interface HeartbeatPayload {
   capabilities: AgentCapabilities;
 }
 
+// --- File Explorer ---
+
+export interface FileEntry {
+  name: string;
+  isDirectory: boolean;
+  size: number;
+  modified: number;
+}
+
 // --- File Transfer ---
 
 export interface TransferInfo {

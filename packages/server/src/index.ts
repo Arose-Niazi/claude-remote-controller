@@ -41,6 +41,14 @@ import {
   type SessionListPayload,
   type SessionSyncResultPayload,
   type SessionBufferPayload,
+  FILES_LIST,
+  FILES_LIST_RESULT,
+  FILES_DOWNLOAD,
+  FILES_DOWNLOAD_READY,
+  type FilesListPayload,
+  type FilesListResultPayload,
+  type FilesDownloadPayload,
+  type FilesDownloadReadyPayload,
 } from '@crc/shared';
 
 import { config } from './config.js';
@@ -178,6 +186,16 @@ agentNs.on('connection', (socket) => {
     if (session) broadcastSessionsForAgent(session.agentId);
   });
 
+  // --- File explorer relay (agent -> client) ---
+  socket.on(FILES_LIST_RESULT, (payload: FilesListResultPayload) => {
+    // Broadcast to all clients — the requestId lets them match
+    clientNs.emit(FILES_LIST_RESULT, payload);
+  });
+
+  socket.on(FILES_DOWNLOAD_READY, (payload: FilesDownloadReadyPayload) => {
+    clientNs.emit(FILES_DOWNLOAD_READY, payload);
+  });
+
   socket.on(SESSION_BUFFER, (payload: SessionBufferPayload) => {
     const session = getSession(payload.sessionId);
     if (!session || !session.clientSocketId) return;
@@ -303,6 +321,25 @@ clientNs.on('connection', (socket) => {
       killSession(s.id);
     }
     broadcastSessionsForAgent(payload.agentId);
+  });
+
+  // --- File explorer relay (client -> agent) ---
+  socket.on(FILES_LIST, (payload: FilesListPayload) => {
+    const { agentId, path: dirPath } = payload;
+    if (!agentId) return;
+    const agentSocketId = getAgentSocketId(agentId);
+    if (!agentSocketId) return;
+    const requestId = uuid();
+    agentNs.to(agentSocketId).emit(FILES_LIST, { requestId, path: dirPath });
+  });
+
+  socket.on(FILES_DOWNLOAD, (payload: FilesDownloadPayload) => {
+    const { agentId, path: filePath } = payload;
+    if (!agentId) return;
+    const agentSocketId = getAgentSocketId(agentId);
+    if (!agentSocketId) return;
+    const requestId = uuid();
+    agentNs.to(agentSocketId).emit(FILES_DOWNLOAD, { requestId, path: filePath });
   });
 
   // --- Terminal I/O (unchanged) ---

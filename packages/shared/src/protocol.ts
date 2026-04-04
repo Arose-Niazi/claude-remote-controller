@@ -36,6 +36,15 @@ export const SESSION_SYNC = 'session:sync' as const;
 // Agent -> Server
 export const SESSION_SYNC_RESULT = 'session:sync:result' as const;
 
+// --- File Explorer Events ---
+// Client -> Server
+export const FILES_LIST = 'files:list' as const;
+export const FILES_DOWNLOAD = 'files:download' as const;
+
+// Server -> Agent / Agent -> Server
+export const FILES_LIST_RESULT = 'files:list:result' as const;
+export const FILES_DOWNLOAD_READY = 'files:download:ready' as const;
+
 // --- File Events ---
 export const FILE_READY = 'file:ready' as const;
 export const FILE_EXPIRED = 'file:expired' as const;
@@ -129,4 +138,33 @@ export interface SessionSyncResultPayload {
 export interface FileGrabPayload {
   agentId: string;
   remotePath: string;
+}
+
+// --- File Explorer Payloads ---
+
+export interface FilesListPayload {
+  agentId?: string;
+  requestId?: string;
+  path: string;
+}
+
+export interface FilesListResultPayload {
+  requestId: string;
+  path: string;
+  entries: import('./types.js').FileEntry[];
+  error?: string;
+}
+
+export interface FilesDownloadPayload {
+  agentId?: string;
+  requestId?: string;
+  path: string;
+}
+
+export interface FilesDownloadReadyPayload {
+  requestId: string;
+  fileId: string;
+  fileName: string;
+  downloadUrl: string;
+  size: number;
 }

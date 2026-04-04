@@ -12,6 +12,10 @@ import {
   SESSION_ATTACH,
   SESSION_DETACH,
   SESSION_BUFFER,
+  FILES_LIST,
+  FILES_LIST_RESULT,
+  FILES_DOWNLOAD,
+  FILES_DOWNLOAD_READY,
   HEARTBEAT_INTERVAL,
   type TerminalOpenPayload,
   type TerminalInputPayload,
@@ -19,11 +23,14 @@ import {
   type TerminalClosePayload,
   type SessionAttachPayload,
   type SessionDetachPayload,
+  type FilesListPayload,
+  type FilesDownloadPayload,
 } from '@crc/shared';
 
 import { loadConfig } from './config.js';
 import { logger } from './logger.js';
 import { buildHeartbeat } from './heartbeat.js';
+import { listDirectory, downloadFile } from './file-explorer.js';
 import {
   createTerminalSession,
   writeToSession,
@@ -118,6 +125,36 @@ socket.on(SESSION_ATTACH, (payload: SessionAttachPayload) => {
 
 socket.on(SESSION_DETACH, (payload: SessionDetachPayload) => {
   detachSession(payload.sessionId);
+});
+
+// --- File explorer handlers ---
+socket.on(FILES_LIST, (payload: FilesListPayload) => {
+  const { requestId, path: dirPath } = payload;
+  if (!requestId) return;
+  const result = listDirectory(dirPath);
+  socket.emit(FILES_LIST_RESULT, {
+    requestId,
+    path: dirPath,
+    entries: result.entries,
+    error: result.error,
+  });
+});
+
+socket.on(FILES_DOWNLOAD, async (payload: FilesDownloadPayload) => {
+  const { requestId, path: filePath } = payload;
+  if (!requestId) return;
+  const result = await downloadFile(filePath, config.serverUrl, config.secret, config.agentId);
+  if ('error' in result) {
+    logger.error({ requestId, error: result.error }, 'File download failed');
+    return;
+  }
+  socket.emit(FILES_DOWNLOAD_READY, {
+    requestId,
+    fileId: result.fileId,
+    fileName: result.fileName,
+    downloadUrl: result.downloadUrl,
+    size: result.size,
+  });
 });
 
 // Graceful shutdown

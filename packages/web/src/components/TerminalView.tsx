@@ -8,11 +8,16 @@ import '@xterm/xterm/css/xterm.css';
 import { TERMINAL_OUTPUT } from '@crc/shared';
 import { useTerminal } from '../hooks/useTerminal';
 import { useAuthStore } from '../stores/authStore';
+import { useAgentStore } from '../stores/agentStore';
 import MobileKeyboard from './MobileKeyboard';
+import FileExplorer from './FileExplorer';
+import FileNotifications from './FileNotifications';
 
 interface TerminalViewProps {
   socket: Socket | null;
 }
+
+let downloadCounter = 0;
 
 export default function TerminalView({ socket }: TerminalViewProps) {
   const { agentId, sessionId: paramSessionId } = useParams<{
@@ -25,8 +30,17 @@ export default function TerminalView({ socket }: TerminalViewProps) {
   const fitAddonRef = useRef<FitAddon | null>(null);
   const isNewSession = paramSessionId === 'new';
   const [uploading, setUploading] = useState(false);
+  const [copyLabel, setCopyLabel] = useState('Copy');
+  const [showFiles, setShowFiles] = useState(false);
+  const [downloads, setDownloads] = useState<
+    { id: number; fileName: string; downloadUrl: string; size: number }[]
+  >([]);
   const token = useAuthStore((s) => s.token);
+  const agents = useAgentStore((s) => s.agents);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const agent = agents.find((a) => a.id === agentId);
+  const initialPath = agent?.homeDirectory || '/';
 
   const {
     sessionId,
@@ -102,7 +116,6 @@ export default function TerminalView({ socket }: TerminalViewProps) {
 
     term.onData((data) => write(data));
 
-    // Open or attach
     if (isNewSession) {
       create(term.cols, term.rows);
     } else if (paramSessionId) {
@@ -124,6 +137,16 @@ export default function TerminalView({ socket }: TerminalViewProps) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Refit terminal when file explorer toggles
+  useEffect(() => {
+    setTimeout(() => {
+      fitAddonRef.current?.fit();
+      if (termRef.current) {
+        resize(termRef.current.cols, termRef.current.rows);
+      }
+    }, 50);
+  }, [showFiles, resize]);
 
   // Wire up terminal output
   useEffect(() => {
@@ -159,6 +182,16 @@ export default function TerminalView({ socket }: TerminalViewProps) {
     [write]
   );
 
+  const handleCopy = useCallback(() => {
+    const term = termRef.current;
+    if (!term) return;
+    const selection = term.getSelection();
+    const text = selection || term.buffer.active.getLine(term.buffer.active.cursorY)?.translateToString() || '';
+    navigator.clipboard.writeText(text);
+    setCopyLabel('Copied!');
+    setTimeout(() => setCopyLabel('Copy'), 1500);
+  }, []);
+
   const handleUpload = useCallback(async () => {
     const input = fileInputRef.current;
     if (!input?.files?.[0]) return;
@@ -187,6 +220,20 @@ export default function TerminalView({ socket }: TerminalViewProps) {
     }
   }, [token, write]);
 
+  const handleDownloadReady = useCallback(
+    (info: { fileName: string; downloadUrl: string; size: number }) => {
+      setDownloads((prev) => [
+        ...prev,
+        { id: ++downloadCounter, ...info },
+      ]);
+    },
+    []
+  );
+
+  const dismissDownload = useCallback((id: number) => {
+    setDownloads((prev) => prev.filter((d) => d.id !== id));
+  }, []);
+
   return (
     <div className="flex flex-col h-[calc(100vh-52px)]">
       <input
@@ -205,25 +252,59 @@ export default function TerminalView({ socket }: TerminalViewProps) {
           ← Back
         </button>
         <span className="text-sm text-slate-300 font-medium">{agentId}</span>
-        <div className="flex gap-2">
+        <div className="flex gap-1.5">
+          <button
+            onClick={handleCopy}
+            className="px-2 py-1 text-sm bg-slate-700 hover:bg-slate-600 text-slate-300 rounded transition-colors"
+          >
+            {copyLabel}
+          </button>
+          <button
+            onClick={() => setShowFiles((p) => !p)}
+            className={`px-2 py-1 text-sm rounded transition-colors ${
+              showFiles
+                ? 'bg-blue-600 text-white'
+                : 'bg-slate-700 hover:bg-slate-600 text-slate-300'
+            }`}
+            title="File explorer"
+          >
+            &#128193;
+          </button>
           <button
             onClick={() => fileInputRef.current?.click()}
             disabled={uploading}
-            className="px-3 py-1 text-sm bg-slate-700 hover:bg-slate-600 text-slate-300 rounded transition-colors disabled:opacity-50"
+            className="px-2 py-1 text-sm bg-slate-700 hover:bg-slate-600 text-slate-300 rounded transition-colors disabled:opacity-50"
           >
             {uploading ? '...' : 'Upload'}
           </button>
           <button
             onClick={handleKill}
-            className="px-3 py-1 text-sm bg-red-900/60 hover:bg-red-800 text-red-300 rounded transition-colors"
+            className="px-2 py-1 text-sm bg-red-900/60 hover:bg-red-800 text-red-300 rounded transition-colors"
           >
             Kill
           </button>
         </div>
       </div>
 
-      {/* Terminal */}
-      <div ref={termContainerRef} className="flex-1 overflow-hidden" />
+      {/* Main area: terminal + optional file explorer */}
+      <div className="flex flex-1 overflow-hidden">
+        <div ref={termContainerRef} className="flex-1 overflow-hidden" />
+
+        {showFiles && (
+          <div className="w-72 md:w-80 flex-shrink-0">
+            <FileExplorer
+              socket={socket}
+              agentId={agentId || ''}
+              initialPath={initialPath}
+              onClose={() => setShowFiles(false)}
+              onDownloadReady={handleDownloadReady}
+            />
+          </div>
+        )}
+      </div>
+
+      {/* Download notifications */}
+      <FileNotifications downloads={downloads} onDismiss={dismissDownload} />
 
       {/* Mobile extra keys */}
       <MobileKeyboard onKey={handleMobileKey} />

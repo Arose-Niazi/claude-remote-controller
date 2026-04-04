@@ -12,13 +12,10 @@ export default function MobileKeyboard({ onKey }: MobileKeyboardProps) {
     (key: string) => {
       let data = key;
       if (ctrlActive) {
-        // Ctrl+letter = char code 1-26
         if (key.length === 1 && key >= 'a' && key <= 'z') {
           data = String.fromCharCode(key.charCodeAt(0) - 96);
         } else if (key.length === 1 && key >= 'A' && key <= 'Z') {
           data = String.fromCharCode(key.charCodeAt(0) - 64);
-        } else if (key === 'c') {
-          data = '\x03';
         }
         setCtrlActive(false);
       }
@@ -46,10 +43,12 @@ export default function MobileKeyboard({ onKey }: MobileKeyboardProps) {
       active: altActive,
       toggle: true,
     },
-    { label: '↑', action: () => sendKey('\x1b[A') },
-    { label: '↓', action: () => sendKey('\x1b[B') },
-    { label: '←', action: () => sendKey('\x1b[D') },
-    { label: '→', action: () => sendKey('\x1b[C') },
+    { label: 'C-c', action: () => onKey('\x03') },
+    { label: 'C-z', action: () => onKey('\x1a') },
+    { label: '\u2191', action: () => sendKey('\x1b[A') },
+    { label: '\u2193', action: () => sendKey('\x1b[B') },
+    { label: '\u2190', action: () => sendKey('\x1b[D') },
+    { label: '\u2192', action: () => sendKey('\x1b[C') },
   ];
 
   return (
