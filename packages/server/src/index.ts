@@ -45,10 +45,18 @@ import {
   FILES_LIST_RESULT,
   FILES_DOWNLOAD,
   FILES_DOWNLOAD_READY,
+  VPN_LIST,
+  VPN_CONNECT,
+  VPN_DISCONNECT,
+  VPN_UPDATE,
   type FilesListPayload,
   type FilesListResultPayload,
   type FilesDownloadPayload,
   type FilesDownloadReadyPayload,
+  type VpnListPayload,
+  type VpnConnectPayload,
+  type VpnDisconnectPayload,
+  type VpnUpdatePayload,
 } from '@crc/shared';
 
 import { config } from './config.js';
@@ -186,6 +194,11 @@ agentNs.on('connection', (socket) => {
     if (session) broadcastSessionsForAgent(session.agentId);
   });
 
+  // --- VPN relay (agent -> client) ---
+  socket.on(VPN_UPDATE, (payload: VpnUpdatePayload) => {
+    clientNs.emit(VPN_UPDATE, { agentId, profiles: payload.profiles });
+  });
+
   // --- File explorer relay (agent -> client) ---
   socket.on(FILES_LIST_RESULT, (payload: FilesListResultPayload) => {
     // Broadcast to all clients — the requestId lets them match
@@ -321,6 +334,26 @@ clientNs.on('connection', (socket) => {
       killSession(s.id);
     }
     broadcastSessionsForAgent(payload.agentId);
+  });
+
+  // --- VPN relay (client -> agent) ---
+  socket.on(VPN_LIST, (payload: VpnListPayload) => {
+    const agentSocketId = getAgentSocketId(payload.agentId);
+    if (agentSocketId) agentNs.to(agentSocketId).emit(VPN_LIST, {});
+  });
+
+  socket.on(VPN_CONNECT, (payload: VpnConnectPayload) => {
+    const { agentId, profileId } = payload;
+    if (!agentId) return;
+    const agentSocketId = getAgentSocketId(agentId);
+    if (agentSocketId) agentNs.to(agentSocketId).emit(VPN_CONNECT, { profileId });
+  });
+
+  socket.on(VPN_DISCONNECT, (payload: VpnDisconnectPayload) => {
+    const { agentId, profileId } = payload;
+    if (!agentId) return;
+    const agentSocketId = getAgentSocketId(agentId);
+    if (agentSocketId) agentNs.to(agentSocketId).emit(VPN_DISCONNECT, { profileId });
   });
 
   // --- File explorer relay (client -> agent) ---

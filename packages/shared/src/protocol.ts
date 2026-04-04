@@ -36,6 +36,15 @@ export const SESSION_SYNC = 'session:sync' as const;
 // Agent -> Server
 export const SESSION_SYNC_RESULT = 'session:sync:result' as const;
 
+// --- VPN Events ---
+// Client -> Server
+export const VPN_LIST = 'vpn:list' as const;
+export const VPN_CONNECT = 'vpn:connect' as const;
+export const VPN_DISCONNECT = 'vpn:disconnect' as const;
+
+// Server -> Client / Agent -> Server
+export const VPN_UPDATE = 'vpn:update' as const;
+
 // --- File Explorer Events ---
 // Client -> Server
 export const FILES_LIST = 'files:list' as const;
@@ -133,6 +142,27 @@ export interface SessionDetachedPayload {
 
 export interface SessionSyncResultPayload {
   sessionIds: string[];
+}
+
+// --- VPN Payloads ---
+
+export interface VpnListPayload {
+  agentId: string;
+}
+
+export interface VpnConnectPayload {
+  agentId?: string;
+  profileId: string;
+}
+
+export interface VpnDisconnectPayload {
+  agentId?: string;
+  profileId: string;
+}
+
+export interface VpnUpdatePayload {
+  agentId?: string;
+  profiles: import('./types.js').VpnProfile[];
 }
 
 export interface FileGrabPayload {

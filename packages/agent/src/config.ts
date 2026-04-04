@@ -2,12 +2,24 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 
+export interface VpnProfileConfig {
+  id: string;
+  name: string;
+  type: 'wireguard' | 'openvpn' | 'azure';
+  tunnelName?: string;
+  profileId?: string;
+  connectionName?: string;
+}
+
 export interface AgentConfig {
   agentId: string;
   serverUrl: string;
   secret: string;
   shell: string;
   homeDir?: string;
+  vpn?: {
+    profiles: VpnProfileConfig[];
+  };
 }
 
 const CONFIG_DIR = path.join(os.homedir(), '.crc-agent');

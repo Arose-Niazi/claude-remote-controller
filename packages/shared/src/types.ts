@@ -50,6 +50,19 @@ export interface HeartbeatPayload {
   capabilities: AgentCapabilities;
 }
 
+// --- VPN ---
+
+export type VpnType = 'wireguard' | 'openvpn' | 'azure';
+export type VpnStatus = 'connected' | 'disconnected' | 'connecting' | 'disconnecting' | 'error';
+
+export interface VpnProfile {
+  id: string;
+  name: string;
+  type: VpnType;
+  status: VpnStatus;
+  error?: string;
+}
+
 // --- File Explorer ---
 
 export interface FileEntry {

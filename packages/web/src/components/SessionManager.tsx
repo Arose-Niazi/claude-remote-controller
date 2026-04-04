@@ -4,6 +4,7 @@ import type { Socket } from 'socket.io-client';
 import { SESSION_LIST, SESSION_KILL, SESSION_KILL_ALL, SESSION_RENAME } from '@crc/shared';
 import type { TerminalSession } from '@crc/shared';
 import { useSessionStore } from '../stores/sessionStore';
+import VpnPanel from './VpnPanel';
 
 interface SessionManagerProps {
   socket: Socket | null;
@@ -23,6 +24,7 @@ export default function SessionManager({ socket }: SessionManagerProps) {
   const sessions = useSessionStore((s) => s.sessions);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [newName, setNewName] = useState('');
+  const [showVpn, setShowVpn] = useState(false);
 
   const agentSessions = sessions.filter((s) => s.agentId === agentId);
 
@@ -68,7 +70,17 @@ export default function SessionManager({ socket }: SessionManagerProps) {
           </button>
           <h2 className="text-lg font-medium">Sessions on {agentId}</h2>
         </div>
+        <button
+          onClick={() => setShowVpn(true)}
+          className="px-3 py-1.5 text-sm bg-slate-700 hover:bg-slate-600 rounded transition-colors"
+        >
+          VPN
+        </button>
       </div>
+
+      {showVpn && agentId && (
+        <VpnPanel socket={socket} agentId={agentId} onClose={() => setShowVpn(false)} />
+      )}
 
       <button
         onClick={handleCreate}

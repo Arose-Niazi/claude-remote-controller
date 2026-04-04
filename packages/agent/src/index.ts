@@ -16,6 +16,10 @@ import {
   FILES_LIST_RESULT,
   FILES_DOWNLOAD,
   FILES_DOWNLOAD_READY,
+  VPN_LIST,
+  VPN_CONNECT,
+  VPN_DISCONNECT,
+  VPN_UPDATE,
   HEARTBEAT_INTERVAL,
   type TerminalOpenPayload,
   type TerminalInputPayload,
@@ -25,12 +29,15 @@ import {
   type SessionDetachPayload,
   type FilesListPayload,
   type FilesDownloadPayload,
+  type VpnConnectPayload,
+  type VpnDisconnectPayload,
 } from '@crc/shared';
 
 import { loadConfig } from './config.js';
 import { logger } from './logger.js';
 import { buildHeartbeat } from './heartbeat.js';
 import { listDirectory, downloadFile } from './file-explorer.js';
+import { getProfiles, connectVpn, disconnectVpn } from './vpn-manager.js';
 import {
   createTerminalSession,
   writeToSession,
@@ -155,6 +162,24 @@ socket.on(FILES_DOWNLOAD, async (payload: FilesDownloadPayload) => {
     downloadUrl: result.downloadUrl,
     size: result.size,
   });
+});
+
+// --- VPN handlers ---
+const vpnProfiles = config.vpn?.profiles || [];
+
+socket.on(VPN_LIST, async () => {
+  const profiles = await getProfiles(vpnProfiles);
+  socket.emit(VPN_UPDATE, { profiles });
+});
+
+socket.on(VPN_CONNECT, async (payload: VpnConnectPayload) => {
+  const profiles = await connectVpn(vpnProfiles, payload.profileId);
+  socket.emit(VPN_UPDATE, { profiles });
+});
+
+socket.on(VPN_DISCONNECT, async (payload: VpnDisconnectPayload) => {
+  const profiles = await disconnectVpn(vpnProfiles, payload.profileId);
+  socket.emit(VPN_UPDATE, { profiles });
 });
 
 // Graceful shutdown
