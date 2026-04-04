@@ -7,6 +7,7 @@ export interface AgentConfig {
   serverUrl: string;
   secret: string;
   shell: string;
+  homeDir?: string;
 }
 
 const CONFIG_DIR = path.join(os.homedir(), '.crc-agent');
@@ -14,7 +15,6 @@ const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
 
 export function loadConfig(): AgentConfig {
   if (!fs.existsSync(CONFIG_FILE)) {
-    // Create default config
     const defaultConfig: AgentConfig = {
       agentId: os.hostname().toLowerCase().replace(/[^a-z0-9-]/g, '-'),
       serverUrl: 'ws://localhost:3001',

@@ -8,13 +8,17 @@ export function createTerminalSession(
   cols: number,
   rows: number,
   shellPreference: string,
+  cwd: string | undefined,
   onData: (sessionId: string, data: string) => void,
   onExit: (sessionId: string, exitCode: number) => void
 ): void {
-  const session = new PtySession(sessionId, cols, rows, shellPreference);
+  const session = new PtySession(sessionId, cols, rows, shellPreference, cwd);
 
   session.onData((data) => {
-    onData(sessionId, data);
+    session.appendToBuffer(data);
+    if (session.isAttached()) {
+      onData(sessionId, data);
+    }
   });
 
   session.onExit((exit) => {
@@ -35,6 +39,24 @@ export function resizeSession(sessionId: string, cols: number, rows: number): vo
   sessions.get(sessionId)?.resize(cols, rows);
 }
 
+export function detachSession(sessionId: string): void {
+  const session = sessions.get(sessionId);
+  if (session) {
+    session.setAttached(false);
+    logger.info({ sessionId }, 'PTY session detached');
+  }
+}
+
+export function attachSession(sessionId: string, cols: number, rows: number): string {
+  const session = sessions.get(sessionId);
+  if (!session) return '';
+  session.setAttached(true);
+  session.resize(cols, rows);
+  const buffered = session.getAndClearBuffer();
+  logger.info({ sessionId, bufferSize: buffered.length }, 'PTY session reattached');
+  return buffered;
+}
+
 export function closeSession(sessionId: string): void {
   const session = sessions.get(sessionId);
   if (session) {
@@ -50,6 +72,17 @@ export function closeAllSessions(): void {
     logger.info({ sessionId: id }, 'PTY session force-closed');
   }
   sessions.clear();
+}
+
+export function detachAllSessions(): void {
+  for (const [id, session] of sessions) {
+    session.setAttached(false);
+    logger.info({ sessionId: id }, 'PTY session detached (disconnect)');
+  }
+}
+
+export function getAliveSessionIds(): string[] {
+  return Array.from(sessions.keys());
 }
 
 export function getActiveSessionCount(): number {

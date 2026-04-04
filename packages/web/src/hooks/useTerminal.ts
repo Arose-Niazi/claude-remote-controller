@@ -1,32 +1,56 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import type { Socket } from 'socket.io-client';
 import {
-  TERMINAL_OPEN,
+  SESSION_CREATE,
+  SESSION_ATTACH,
+  SESSION_DETACH,
+  SESSION_KILL,
   TERMINAL_INPUT,
   TERMINAL_RESIZE,
-  TERMINAL_CLOSE,
   TERMINAL_READY,
-  TERMINAL_OUTPUT,
   TERMINAL_EXIT,
+  SESSION_BUFFER,
+  SESSION_DETACHED,
 } from '@crc/shared';
 
 interface UseTerminalOptions {
   socket: Socket | null;
   agentId: string;
+  existingSessionId?: string;
   onReady?: (sessionId: string) => void;
   onExit?: (exitCode: number) => void;
+  onBuffer?: (data: string) => void;
+  onDetached?: (reason: string) => void;
 }
 
-export function useTerminal({ socket, agentId, onReady, onExit }: UseTerminalOptions) {
-  const sessionIdRef = useRef<string | null>(null);
-  const [sessionId, setSessionId] = useState<string | null>(null);
+export function useTerminal({
+  socket,
+  agentId,
+  existingSessionId,
+  onReady,
+  onExit,
+  onBuffer,
+  onDetached,
+}: UseTerminalOptions) {
+  const sessionIdRef = useRef<string | null>(existingSessionId || null);
+  const [sessionId, setSessionId] = useState<string | null>(existingSessionId || null);
 
-  const open = useCallback(
-    (cols: number, rows: number) => {
+  const create = useCallback(
+    (cols: number, rows: number, name?: string) => {
       if (!socket) return;
-      socket.emit(TERMINAL_OPEN, { agentId, cols, rows });
+      socket.emit(SESSION_CREATE, { agentId, name, cols, rows });
     },
     [socket, agentId]
+  );
+
+  const attach = useCallback(
+    (sid: string, cols: number, rows: number) => {
+      if (!socket) return;
+      sessionIdRef.current = sid;
+      setSessionId(sid);
+      socket.emit(SESSION_ATTACH, { sessionId: sid, cols, rows });
+    },
+    [socket]
   );
 
   const write = useCallback(
@@ -45,9 +69,16 @@ export function useTerminal({ socket, agentId, onReady, onExit }: UseTerminalOpt
     [socket]
   );
 
-  const close = useCallback(() => {
+  const detach = useCallback(() => {
     if (!socket || !sessionIdRef.current) return;
-    socket.emit(TERMINAL_CLOSE, { sessionId: sessionIdRef.current });
+    socket.emit(SESSION_DETACH, { sessionId: sessionIdRef.current });
+    sessionIdRef.current = null;
+    setSessionId(null);
+  }, [socket]);
+
+  const kill = useCallback(() => {
+    if (!socket || !sessionIdRef.current) return;
+    socket.emit(SESSION_KILL, { sessionId: sessionIdRef.current });
     sessionIdRef.current = null;
     setSessionId(null);
   }, [socket]);
@@ -69,14 +100,32 @@ export function useTerminal({ socket, agentId, onReady, onExit }: UseTerminalOpt
       }
     };
 
+    const handleBuffer = (payload: { sessionId: string; data: string }) => {
+      if (payload.sessionId === sessionIdRef.current) {
+        onBuffer?.(payload.data);
+      }
+    };
+
+    const handleDetached = (payload: { sessionId: string; reason: string }) => {
+      if (payload.sessionId === sessionIdRef.current || payload.sessionId === '') {
+        sessionIdRef.current = null;
+        setSessionId(null);
+        onDetached?.(payload.reason);
+      }
+    };
+
     socket.on(TERMINAL_READY, handleReady);
     socket.on(TERMINAL_EXIT, handleExit);
+    socket.on(SESSION_BUFFER, handleBuffer);
+    socket.on(SESSION_DETACHED, handleDetached);
 
     return () => {
       socket.off(TERMINAL_READY, handleReady);
       socket.off(TERMINAL_EXIT, handleExit);
+      socket.off(SESSION_BUFFER, handleBuffer);
+      socket.off(SESSION_DETACHED, handleDetached);
     };
-  }, [socket, onReady, onExit]);
+  }, [socket, onReady, onExit, onBuffer, onDetached]);
 
-  return { sessionId, open, write, resize, close };
+  return { sessionId, create, attach, write, resize, detach, kill };
 }

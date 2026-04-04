@@ -14,9 +14,29 @@ export const TERMINAL_CLOSE = 'terminal:close' as const;
 // --- Server -> Client ---
 export const AGENTS_UPDATE = 'agents:update' as const;
 export const TERMINAL_READY = 'terminal:ready' as const;
-// Also uses TERMINAL_OUTPUT and TERMINAL_EXIT
 
-// --- File Events (defined now, handlers implemented Phase 4) ---
+// --- Session lifecycle events ---
+// Client -> Server
+export const SESSION_LIST = 'session:list' as const;
+export const SESSION_CREATE = 'session:create' as const;
+export const SESSION_ATTACH = 'session:attach' as const;
+export const SESSION_DETACH = 'session:detach' as const;
+export const SESSION_RENAME = 'session:rename' as const;
+export const SESSION_KILL = 'session:kill' as const;
+export const SESSION_KILL_ALL = 'session:killAll' as const;
+
+// Server -> Client
+export const SESSIONS_UPDATE = 'sessions:update' as const;
+export const SESSION_BUFFER = 'session:buffer' as const;
+export const SESSION_DETACHED = 'session:detached' as const;
+
+// Server -> Agent
+export const SESSION_SYNC = 'session:sync' as const;
+
+// Agent -> Server
+export const SESSION_SYNC_RESULT = 'session:sync:result' as const;
+
+// --- File Events ---
 export const FILE_READY = 'file:ready' as const;
 export const FILE_EXPIRED = 'file:expired' as const;
 export const FILE_GRAB = 'file:grab' as const;
@@ -56,6 +76,54 @@ export interface TerminalClosePayload {
 
 export interface TerminalReadyPayload {
   sessionId: string;
+}
+
+export interface SessionListPayload {
+  agentId: string;
+}
+
+export interface SessionCreatePayload {
+  agentId: string;
+  name?: string;
+  cols: number;
+  rows: number;
+}
+
+export interface SessionAttachPayload {
+  sessionId: string;
+  cols: number;
+  rows: number;
+}
+
+export interface SessionDetachPayload {
+  sessionId: string;
+}
+
+export interface SessionRenamePayload {
+  sessionId: string;
+  name: string;
+}
+
+export interface SessionKillPayload {
+  sessionId: string;
+}
+
+export interface SessionKillAllPayload {
+  agentId: string;
+}
+
+export interface SessionBufferPayload {
+  sessionId: string;
+  data: string;
+}
+
+export interface SessionDetachedPayload {
+  sessionId: string;
+  reason: string;
+}
+
+export interface SessionSyncResultPayload {
+  sessionIds: string[];
 }
 
 export interface FileGrabPayload {

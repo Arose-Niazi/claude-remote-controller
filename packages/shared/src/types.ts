@@ -23,12 +23,17 @@ export interface AgentInfo {
   capabilities: AgentCapabilities;
 }
 
+export type SessionStatus = 'attached' | 'detached' | 'dead';
+
 export interface TerminalSession {
   id: string;
   agentId: string;
+  name: string;
+  status: SessionStatus;
   cols: number;
   rows: number;
   createdAt: number;
+  lastAttachedAt: number;
 }
 
 export interface HeartbeatPayload {
@@ -45,7 +50,7 @@ export interface HeartbeatPayload {
   capabilities: AgentCapabilities;
 }
 
-// --- File Transfer (types defined now, implemented in Phase 4) ---
+// --- File Transfer ---
 
 export interface TransferInfo {
   fileId: string;

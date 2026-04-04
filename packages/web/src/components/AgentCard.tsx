@@ -60,7 +60,7 @@ export default function AgentCard({ agent }: AgentCardProps) {
       </div>
 
       <button
-        onClick={() => navigate(`/terminal/${agent.id}`)}
+        onClick={() => navigate(`/sessions/${agent.id}`)}
         disabled={!isOnline}
         className="w-full py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 disabled:text-slate-500 disabled:cursor-not-allowed rounded-lg text-sm font-medium transition-colors"
       >
