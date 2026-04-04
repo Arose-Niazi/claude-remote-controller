@@ -32,10 +32,19 @@ export default function FileExplorer({
   onDownloadReady,
 }: FileExplorerProps) {
   const [currentPath, setCurrentPath] = useState(initialPath);
+  const [hasNavigated, setHasNavigated] = useState(false);
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [copiedName, setCopiedName] = useState<string | null>(null);
+
+  // Sync to initialPath when heartbeat arrives with the real homeDir
+  // (only if user hasn't manually navigated yet)
+  useEffect(() => {
+    if (!hasNavigated && initialPath && initialPath !== '/' && initialPath !== currentPath) {
+      setCurrentPath(initialPath);
+    }
+  }, [initialPath, hasNavigated, currentPath]);
 
   const loadDirectory = useCallback(
     (dirPath: string) => {
@@ -82,6 +91,7 @@ export default function FileExplorer({
   }, [socket, onDownloadReady]);
 
   const navigateTo = (name: string) => {
+    setHasNavigated(true);
     const sep = currentPath.includes('\\') ? '\\' : '/';
     const newPath = currentPath.endsWith(sep)
       ? currentPath + name
@@ -90,6 +100,7 @@ export default function FileExplorer({
   };
 
   const navigateUp = () => {
+    setHasNavigated(true);
     const sep = currentPath.includes('\\') ? '\\' : '/';
     const parts = currentPath.split(sep).filter(Boolean);
     if (parts.length <= 1) {
