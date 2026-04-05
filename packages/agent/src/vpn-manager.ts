@@ -9,7 +9,7 @@ const isWindows = process.platform === 'win32';
 
 async function runCommand(cmd: string): Promise<{ stdout: string; stderr: string }> {
   try {
-    return await execAsync(cmd, { timeout: 15000 });
+    return await execAsync(cmd, { timeout: 15000, shell: isWindows ? 'powershell.exe' : '/bin/sh' });
   } catch (err: any) {
     return { stdout: err.stdout || '', stderr: err.stderr || err.message };
   }
@@ -19,11 +19,16 @@ async function runCommand(cmd: string): Promise<{ stdout: string; stderr: string
 
 async function getWireGuardStatus(tunnelName: string): Promise<VpnStatus> {
   if (isWindows) {
-    const { stdout } = await runCommand(`sc query WireGuardTunnel$${tunnelName}`);
-    if (stdout.includes('RUNNING')) return 'connected';
-    if (stdout.includes('START_PENDING')) return 'connecting';
-    if (stdout.includes('STOP_PENDING')) return 'disconnecting';
-    return 'disconnected';
+    // Check if the tunnel service exists and is running
+    const { stdout } = await runCommand(`Get-Service -Name 'WireGuardTunnel$$${tunnelName}' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Status`);
+    const status = stdout.trim();
+    if (status === 'Running') return 'connected';
+    if (status === 'StartPending') return 'connecting';
+    if (status === 'StopPending') return 'disconnecting';
+    if (status === 'Stopped') return 'disconnected';
+    // Service doesn't exist — check if WireGuard interface is up via wg show
+    const { stdout: wgOut } = await runCommand(`& 'C:\\Program Files\\WireGuard\\wg.exe' show '${tunnelName}' 2>&1`);
+    return wgOut.includes('interface:') ? 'connected' : 'disconnected';
   }
   // macOS
   const { stdout } = await runCommand(`wg show ${tunnelName} 2>/dev/null`);
@@ -32,14 +37,25 @@ async function getWireGuardStatus(tunnelName: string): Promise<VpnStatus> {
 
 async function getOpenVpnStatus(profileId: string): Promise<VpnStatus> {
   const exe = isWindows
-    ? '"C:\\Program Files\\OpenVPN Connect\\OpenVPNConnect.exe"'
+    ? '& "C:\\Program Files\\OpenVPN Connect\\OpenVPNConnect.exe"'
     : '"/Applications/OpenVPN Connect/OpenVPN Connect.app/Contents/MacOS/OpenVPN Connect"';
   const { stdout } = await runCommand(`${exe} --list-profiles 2>&1`);
-  // Parse output for the profile's status
-  for (const line of stdout.split('\n')) {
-    if (line.includes(profileId)) {
-      if (line.toLowerCase().includes('connected')) return 'connected';
-      if (line.toLowerCase().includes('connecting')) return 'connecting';
+  try {
+    const profiles = JSON.parse(stdout);
+    if (Array.isArray(profiles)) {
+      const profile = profiles.find((p: any) => p.id === profileId);
+      if (profile) {
+        const status = (profile.status || profile.connection_status || '').toLowerCase();
+        if (status.includes('connected') && !status.includes('disconnected')) return 'connected';
+        if (status.includes('connecting')) return 'connecting';
+      }
+    }
+  } catch {
+    // Output wasn't JSON — try line-based parsing
+    for (const line of stdout.split('\n')) {
+      if (line.includes(profileId) && line.toLowerCase().includes('connected')) {
+        return 'connected';
+      }
     }
   }
   return 'disconnected';
@@ -47,14 +63,19 @@ async function getOpenVpnStatus(profileId: string): Promise<VpnStatus> {
 
 async function getAzureStatus(connectionName: string): Promise<VpnStatus> {
   if (isWindows) {
-    const { stdout } = await runCommand('rasdial');
-    if (stdout.includes(connectionName)) return 'connected';
+    // Check for active VPN adapter related to Azure
+    const { stdout } = await runCommand(
+      `Get-NetAdapter | Where-Object { $_.Status -eq 'Up' -and ($_.InterfaceDescription -like '*Aadds*' -or $_.InterfaceDescription -like '*Azure*' -or $_.Name -like '*${connectionName}*') } | Measure-Object | Select-Object -ExpandProperty Count`
+    );
+    if (parseInt(stdout.trim(), 10) > 0) return 'connected';
+    // Also check ipconfig for the connection name
+    const { stdout: ipOut } = await runCommand(`ipconfig | Select-String '${connectionName}'`);
+    if (ipOut.trim()) return 'connected';
     return 'disconnected';
   }
-  // macOS: check network interfaces for VPN
+  // macOS
   const { stdout } = await runCommand('ifconfig | grep -c utun');
-  const count = parseInt(stdout.trim(), 10);
-  return count > 1 ? 'connected' : 'disconnected';
+  return parseInt(stdout.trim(), 10) > 1 ? 'connected' : 'disconnected';
 }
 
 async function getStatus(profile: VpnProfileConfig): Promise<VpnStatus> {
@@ -79,8 +100,15 @@ async function getStatus(profile: VpnProfileConfig): Promise<VpnStatus> {
 
 async function connectWireGuard(tunnelName: string): Promise<string | null> {
   if (isWindows) {
-    const { stderr } = await runCommand(`net start WireGuardTunnel$${tunnelName}`);
-    if (stderr && !stderr.includes('already been started')) return stderr;
+    // Try starting the service first
+    const { stderr, stdout } = await runCommand(`net start WireGuardTunnel$$${tunnelName} 2>&1`);
+    const output = stdout + stderr;
+    if (output.includes('successfully') || output.includes('already been started')) return null;
+    // If service doesn't exist, try installing it
+    const { stderr: installErr } = await runCommand(
+      `& 'C:\\Program Files\\WireGuard\\wireguard.exe' /installtunnelservice '${tunnelName}' 2>&1`
+    );
+    if (installErr) return installErr;
     return null;
   }
   const { stderr } = await runCommand(`sudo wg-quick up ${tunnelName}`);
@@ -89,9 +117,10 @@ async function connectWireGuard(tunnelName: string): Promise<string | null> {
 
 async function disconnectWireGuard(tunnelName: string): Promise<string | null> {
   if (isWindows) {
-    const { stderr } = await runCommand(`net stop WireGuardTunnel$${tunnelName}`);
-    if (stderr && !stderr.includes('is not started')) return stderr;
-    return null;
+    const { stderr, stdout } = await runCommand(`net stop WireGuardTunnel$$${tunnelName} 2>&1`);
+    const output = stdout + stderr;
+    if (output.includes('successfully') || output.includes('is not started')) return null;
+    return output || null;
   }
   const { stderr } = await runCommand(`sudo wg-quick down ${tunnelName}`);
   return stderr || null;
@@ -99,31 +128,32 @@ async function disconnectWireGuard(tunnelName: string): Promise<string | null> {
 
 async function connectOpenVpn(profileId: string): Promise<string | null> {
   const exe = isWindows
-    ? '"C:\\Program Files\\OpenVPN Connect\\OpenVPNConnect.exe"'
+    ? '& "C:\\Program Files\\OpenVPN Connect\\OpenVPNConnect.exe"'
     : 'open -a "OpenVPN Connect" --args';
-  const { stderr } = await runCommand(`${exe} --connect-shortcut=${profileId}`);
+  const { stderr } = await runCommand(`${exe} --connect-shortcut=${profileId} 2>&1`);
   return stderr || null;
 }
 
 async function disconnectOpenVpn(): Promise<string | null> {
   const exe = isWindows
-    ? '"C:\\Program Files\\OpenVPN Connect\\OpenVPNConnect.exe"'
+    ? '& "C:\\Program Files\\OpenVPN Connect\\OpenVPNConnect.exe"'
     : 'open -a "OpenVPN Connect" --args';
-  const { stderr } = await runCommand(`${exe} --disconnect-shortcut`);
+  const { stderr } = await runCommand(`${exe} --disconnect-shortcut 2>&1`);
   return stderr || null;
 }
 
 async function connectAzure(connectionName: string): Promise<string | null> {
   if (isWindows) {
-    const { stderr } = await runCommand(`rasdial "${connectionName}"`);
+    // Use ms-azurevpn: URI scheme — works with UWP Azure VPN Client
+    const { stderr } = await runCommand(`Start-Process "ms-azurevpn:connect?name=${connectionName}"`);
     return stderr || null;
   }
-  return 'Azure VPN CLI not supported on macOS';
+  return 'Azure VPN CLI not supported on macOS — use the app directly';
 }
 
 async function disconnectAzure(connectionName: string): Promise<string | null> {
   if (isWindows) {
-    const { stderr } = await runCommand(`rasdial "${connectionName}" /disconnect`);
+    const { stderr } = await runCommand(`Start-Process "ms-azurevpn:disconnect?name=${connectionName}"`);
     return stderr || null;
   }
   return 'Azure VPN CLI not supported on macOS';
@@ -167,15 +197,12 @@ export async function connectVpn(
       break;
   }
 
-  if (error) {
-    logger.error({ profileId, error }, 'VPN connect failed');
-  }
+  if (error) logger.error({ profileId, error }, 'VPN connect failed');
 
-  // Wait briefly for status to settle
-  await new Promise((r) => setTimeout(r, 2000));
+  // Wait for connection to establish
+  await new Promise((r) => setTimeout(r, 3000));
   const profiles = await getProfiles(configs);
 
-  // Attach error to the relevant profile if connect failed
   if (error) {
     const p = profiles.find((p) => p.id === profileId);
     if (p) {
@@ -209,9 +236,7 @@ export async function disconnectVpn(
       break;
   }
 
-  if (error) {
-    logger.error({ profileId, error }, 'VPN disconnect failed');
-  }
+  if (error) logger.error({ profileId, error }, 'VPN disconnect failed');
 
   await new Promise((r) => setTimeout(r, 2000));
   const profiles = await getProfiles(configs);
