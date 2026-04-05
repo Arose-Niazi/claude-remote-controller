@@ -125,6 +125,34 @@ async function connectOpenVpn(profile: VpnProfileConfig): Promise<string | null>
   return stderr || null;
 }
 
+async function connectAzure(profile: VpnProfileConfig): Promise<string | null> {
+  const confPath = getConfigPath(profile);
+  if (!fs.existsSync(confPath)) {
+    return `Config file not found: ${confPath}`;
+  }
+
+  if (isWindows) {
+    // Import the XML config into Azure VPN Client and open the app
+    // azurevpn -i imports the profile, then the app opens for user to authenticate
+    await runCmd(`& 'AzureVpn.exe' -i '${confPath}' 2>&1`);
+    // Give it time to import and open
+    await new Promise((r) => setTimeout(r, 2000));
+    // Open the app
+    await runCmd(`Start-Process 'shell:AppsFolder\\Microsoft.AzureVpn_8wekyb3d8bbwe!App'`);
+    return 'Azure VPN app opened — requires Azure AD sign-in to connect';
+  }
+  return 'Azure VPN not supported on macOS CLI';
+}
+
+async function disconnectAzure(): Promise<string | null> {
+  if (isWindows) {
+    // Open the app for disconnect — Azure AD VPN can't be disconnected headlessly
+    await runCmd(`Start-Process 'shell:AppsFolder\\Microsoft.AzureVpn_8wekyb3d8bbwe!App'`);
+    return 'Azure VPN app opened — disconnect from the app';
+  }
+  return 'Azure VPN not supported on macOS CLI';
+}
+
 // ========== DISCONNECT ==========
 
 async function disconnectWireGuard(profile: VpnProfileConfig): Promise<string | null> {
@@ -176,8 +204,9 @@ export async function connectVpn(
 
   if (cfg.type === 'wireguard') {
     error = await connectWireGuard(cfg);
+  } else if (cfg.type === 'azure') {
+    error = await connectAzure(cfg);
   } else {
-    // openvpn and azure both use .ovpn via ovpnconnector
     error = await connectOpenVpn(cfg);
   }
 
@@ -205,6 +234,8 @@ export async function disconnectVpn(
 
   if (cfg.type === 'wireguard') {
     error = await disconnectWireGuard(cfg);
+  } else if (cfg.type === 'azure') {
+    error = await disconnectAzure();
   } else {
     error = await disconnectOpenVpn(cfg);
   }
