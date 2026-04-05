@@ -115,7 +115,11 @@ export default function VpnPanel({ socket, agentId, onClose }: VpnPanelProps) {
                 </div>
 
                 {profile.error && (
-                  <div className="text-xs text-red-400 mb-2 bg-red-900/20 rounded p-1.5 break-words">
+                  <div className={`text-xs mb-2 rounded p-1.5 break-words ${
+                    profile.error.includes('app opened')
+                      ? 'text-blue-300 bg-blue-900/20'
+                      : 'text-red-400 bg-red-900/20'
+                  }`}>
                     {profile.error}
                   </div>
                 )}

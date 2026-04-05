@@ -144,17 +144,19 @@ async function disconnectOpenVpn(): Promise<string | null> {
 
 async function connectAzure(connectionName: string): Promise<string | null> {
   if (isWindows) {
-    // Use ms-azurevpn: URI scheme — works with UWP Azure VPN Client
-    const { stderr } = await runCommand(`Start-Process "ms-azurevpn:connect?name=${connectionName}"`);
-    return stderr || null;
+    // Azure VPN Client doesn't support headless CLI connect — it requires GUI for Azure AD auth.
+    // Best we can do: launch the app so user can tap Connect.
+    await runCommand(`Start-Process "shell:AppsFolder\\Microsoft.AzureVpn_8wekyb3d8bbwe!App"`);
+    return 'Azure VPN app opened — tap Connect in the app (requires Azure AD auth)';
   }
   return 'Azure VPN CLI not supported on macOS — use the app directly';
 }
 
 async function disconnectAzure(connectionName: string): Promise<string | null> {
   if (isWindows) {
-    const { stderr } = await runCommand(`Start-Process "ms-azurevpn:disconnect?name=${connectionName}"`);
-    return stderr || null;
+    // Same limitation — open the app for user to disconnect
+    await runCommand(`Start-Process "shell:AppsFolder\\Microsoft.AzureVpn_8wekyb3d8bbwe!App"`);
+    return 'Azure VPN app opened — tap Disconnect in the app';
   }
   return 'Azure VPN CLI not supported on macOS';
 }
