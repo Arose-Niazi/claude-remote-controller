@@ -1,178 +1,165 @@
 import { exec } from 'child_process';
 import { promisify } from 'util';
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
 import type { VpnProfile, VpnStatus } from '@crc/shared';
 import type { VpnProfileConfig } from './config.js';
 import { logger } from './logger.js';
 
 const execAsync = promisify(exec);
 const isWindows = process.platform === 'win32';
+const VPN_DIR = path.join(os.homedir(), '.crc-agent', 'vpn');
 
-async function runCommand(cmd: string): Promise<{ stdout: string; stderr: string }> {
+async function runCmd(cmd: string, shell?: string): Promise<{ stdout: string; stderr: string }> {
   try {
-    return await execAsync(cmd, { timeout: 15000, shell: isWindows ? 'powershell.exe' : '/bin/sh' });
+    return await execAsync(cmd, {
+      timeout: 20000,
+      shell: shell || (isWindows ? 'powershell.exe' : '/bin/sh'),
+    });
   } catch (err: any) {
     return { stdout: err.stdout || '', stderr: err.stderr || err.message };
   }
 }
 
-// --- Status checking ---
+function getConfigPath(profile: VpnProfileConfig): string {
+  // configFile can be absolute or relative to ~/.crc-agent/vpn/
+  const file = profile.configFile || `${profile.id}.conf`;
+  if (path.isAbsolute(file)) return file;
+  return path.join(VPN_DIR, file);
+}
+
+// ========== STATUS ==========
 
 async function getWireGuardStatus(tunnelName: string): Promise<VpnStatus> {
   if (isWindows) {
-    // Check if the tunnel service exists and is running
-    const { stdout } = await runCommand(`Get-Service -Name 'WireGuardTunnel$$${tunnelName}' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Status`);
-    const status = stdout.trim();
-    if (status === 'Running') return 'connected';
-    if (status === 'StartPending') return 'connecting';
-    if (status === 'StopPending') return 'disconnecting';
-    if (status === 'Stopped') return 'disconnected';
-    // Service doesn't exist — check if WireGuard interface is up via wg show
-    const { stdout: wgOut } = await runCommand(`& 'C:\\Program Files\\WireGuard\\wg.exe' show '${tunnelName}' 2>&1`);
-    return wgOut.includes('interface:') ? 'connected' : 'disconnected';
+    const { stdout } = await runCmd(
+      `Get-Service -Name 'WireGuardTunnel$$${tunnelName}' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Status`
+    );
+    const s = stdout.trim();
+    if (s === 'Running') return 'connected';
+    if (s === 'StartPending') return 'connecting';
+    if (s === 'StopPending') return 'disconnecting';
+    return 'disconnected';
   }
-  // macOS
-  const { stdout } = await runCommand(`wg show ${tunnelName} 2>/dev/null`);
+  const { stdout } = await runCmd(`wg show ${tunnelName} 2>/dev/null`);
   return stdout.trim() ? 'connected' : 'disconnected';
 }
 
-async function getOpenVpnStatus(profileId: string): Promise<VpnStatus> {
-  const exe = isWindows
-    ? '& "C:\\Program Files\\OpenVPN Connect\\OpenVPNConnect.exe"'
-    : '"/Applications/OpenVPN Connect/OpenVPN Connect.app/Contents/MacOS/OpenVPN Connect"';
-  const { stdout } = await runCommand(`${exe} --list-profiles 2>&1`);
-  try {
-    const profiles = JSON.parse(stdout);
-    if (Array.isArray(profiles)) {
-      const profile = profiles.find((p: any) => p.id === profileId);
-      if (profile) {
-        const status = (profile.status || profile.connection_status || '').toLowerCase();
-        if (status.includes('connected') && !status.includes('disconnected')) return 'connected';
-        if (status.includes('connecting')) return 'connecting';
-      }
-    }
-  } catch {
-    // Output wasn't JSON — try line-based parsing
-    for (const line of stdout.split('\n')) {
-      if (line.includes(profileId) && line.toLowerCase().includes('connected')) {
-        return 'connected';
-      }
-    }
-  }
-  return 'disconnected';
-}
-
-async function getAzureStatus(connectionName: string): Promise<VpnStatus> {
+async function getOpenVpnStatus(profile: VpnProfileConfig): Promise<VpnStatus> {
   if (isWindows) {
-    // Check for active VPN adapter related to Azure
-    const { stdout } = await runCommand(
-      `Get-NetAdapter | Where-Object { $_.Status -eq 'Up' -and ($_.InterfaceDescription -like '*Aadds*' -or $_.InterfaceDescription -like '*Azure*' -or $_.Name -like '*${connectionName}*') } | Measure-Object | Select-Object -ExpandProperty Count`
+    // Check if ovpnconnector service is running for this profile
+    const { stdout } = await runCmd(
+      `Get-Service -Name 'ovpnconnector' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Status`
     );
-    if (parseInt(stdout.trim(), 10) > 0) return 'connected';
-    // Also check ipconfig for the connection name
-    const { stdout: ipOut } = await runCommand(`ipconfig | Select-String '${connectionName}'`);
-    if (ipOut.trim()) return 'connected';
+    if (stdout.trim() === 'Running') {
+      // Verify it's connected by checking for tun/tap adapter
+      const { stdout: netOut } = await runCmd(
+        `Get-NetAdapter | Where-Object { $_.InterfaceDescription -like '*OpenVPN*' -and $_.Status -eq 'Up' } | Measure-Object | Select-Object -ExpandProperty Count`
+      );
+      return parseInt(netOut.trim(), 10) > 0 ? 'connected' : 'connecting';
+    }
     return 'disconnected';
   }
-  // macOS
-  const { stdout } = await runCommand('ifconfig | grep -c utun');
-  return parseInt(stdout.trim(), 10) > 1 ? 'connected' : 'disconnected';
+  // macOS: check if openvpn process is running
+  const { stdout } = await runCmd('pgrep -f "openvpn.*\\.ovpn" | head -1');
+  return stdout.trim() ? 'connected' : 'disconnected';
 }
 
 async function getStatus(profile: VpnProfileConfig): Promise<VpnStatus> {
   try {
-    switch (profile.type) {
-      case 'wireguard':
-        return await getWireGuardStatus(profile.tunnelName || profile.id);
-      case 'openvpn':
-        return await getOpenVpnStatus(profile.profileId || profile.id);
-      case 'azure':
-        return await getAzureStatus(profile.connectionName || profile.id);
-      default:
-        return 'disconnected';
+    if (profile.type === 'wireguard') {
+      return await getWireGuardStatus(profile.tunnelName || profile.id);
     }
+    // Both openvpn and azure use the same ovpnconnector mechanism
+    return await getOpenVpnStatus(profile);
   } catch (err: any) {
     logger.error({ profile: profile.id, error: err.message }, 'Status check failed');
     return 'disconnected';
   }
 }
 
-// --- Connect / Disconnect ---
+// ========== CONNECT ==========
 
-async function connectWireGuard(tunnelName: string): Promise<string | null> {
+async function connectWireGuard(profile: VpnProfileConfig): Promise<string | null> {
+  const tunnelName = profile.tunnelName || profile.id;
+  const confPath = getConfigPath(profile);
+
   if (isWindows) {
-    // Try starting the service first
-    const { stderr, stdout } = await runCommand(`net start WireGuardTunnel$$${tunnelName} 2>&1`);
+    if (!fs.existsSync(confPath)) {
+      return `Config file not found: ${confPath}`;
+    }
+    // Install tunnel service if not exists, then start
+    await runCmd(`& 'C:\\Program Files\\WireGuard\\wireguard.exe' /installtunnelservice '${confPath}'`);
+    const { stdout, stderr } = await runCmd(`net start WireGuardTunnel$$${tunnelName} 2>&1`, 'cmd.exe');
     const output = stdout + stderr;
     if (output.includes('successfully') || output.includes('already been started')) return null;
-    // If service doesn't exist, try installing it
-    const { stderr: installErr } = await runCommand(
-      `& 'C:\\Program Files\\WireGuard\\wireguard.exe' /installtunnelservice '${tunnelName}' 2>&1`
-    );
-    if (installErr) return installErr;
+    return output.trim() || null;
+  }
+  // macOS
+  const { stderr } = await runCmd(`sudo wg-quick up ${confPath}`);
+  return stderr || null;
+}
+
+async function connectOpenVpn(profile: VpnProfileConfig): Promise<string | null> {
+  const confPath = getConfigPath(profile);
+  if (!fs.existsSync(confPath)) {
+    return `Config file not found: ${confPath}`;
+  }
+
+  if (isWindows) {
+    // Use ovpnconnector: set profile path, then start
+    const connector = 'C:\\Program Files\\OpenVPN Connect\\ovpnconnector.exe';
+    await runCmd(`& '${connector}' stop 2>&1`);
+    const { stderr: setErr } = await runCmd(`& '${connector}' set-config profile '${confPath}'`);
+    if (setErr && !setErr.includes('success')) {
+      return `Failed to set profile: ${setErr}`;
+    }
+    const { stderr: startErr, stdout } = await runCmd(`& '${connector}' start 2>&1`);
+    const output = stdout + startErr;
+    if (output.toLowerCase().includes('error')) return output.trim();
     return null;
   }
-  const { stderr } = await runCommand(`sudo wg-quick up ${tunnelName}`);
+  // macOS: run openvpn in background
+  const { stderr } = await runCmd(`sudo openvpn --config '${confPath}' --daemon`);
   return stderr || null;
 }
 
-async function disconnectWireGuard(tunnelName: string): Promise<string | null> {
+// ========== DISCONNECT ==========
+
+async function disconnectWireGuard(profile: VpnProfileConfig): Promise<string | null> {
+  const tunnelName = profile.tunnelName || profile.id;
   if (isWindows) {
-    const { stderr, stdout } = await runCommand(`net stop WireGuardTunnel$$${tunnelName} 2>&1`);
+    const { stdout, stderr } = await runCmd(`net stop WireGuardTunnel$$${tunnelName} 2>&1`, 'cmd.exe');
     const output = stdout + stderr;
     if (output.includes('successfully') || output.includes('is not started')) return null;
-    return output || null;
+    return output.trim() || null;
   }
-  const { stderr } = await runCommand(`sudo wg-quick down ${tunnelName}`);
+  const confPath = getConfigPath(profile);
+  const { stderr } = await runCmd(`sudo wg-quick down ${confPath}`);
   return stderr || null;
 }
 
-async function connectOpenVpn(profileId: string): Promise<string | null> {
-  const exe = isWindows
-    ? '& "C:\\Program Files\\OpenVPN Connect\\OpenVPNConnect.exe"'
-    : 'open -a "OpenVPN Connect" --args';
-  const { stderr } = await runCommand(`${exe} --connect-shortcut=${profileId} 2>&1`);
-  return stderr || null;
-}
-
-async function disconnectOpenVpn(): Promise<string | null> {
-  const exe = isWindows
-    ? '& "C:\\Program Files\\OpenVPN Connect\\OpenVPNConnect.exe"'
-    : 'open -a "OpenVPN Connect" --args';
-  const { stderr } = await runCommand(`${exe} --disconnect-shortcut 2>&1`);
-  return stderr || null;
-}
-
-async function connectAzure(connectionName: string): Promise<string | null> {
+async function disconnectOpenVpn(profile: VpnProfileConfig): Promise<string | null> {
   if (isWindows) {
-    // Azure VPN Client doesn't support headless CLI connect — it requires GUI for Azure AD auth.
-    // Best we can do: launch the app so user can tap Connect.
-    await runCommand(`Start-Process "shell:AppsFolder\\Microsoft.AzureVpn_8wekyb3d8bbwe!App"`);
-    return 'Azure VPN app opened — tap Connect in the app (requires Azure AD auth)';
+    const connector = 'C:\\Program Files\\OpenVPN Connect\\ovpnconnector.exe';
+    const { stderr, stdout } = await runCmd(`& '${connector}' stop 2>&1`);
+    const output = stdout + stderr;
+    if (output.toLowerCase().includes('error')) return output.trim();
+    return null;
   }
-  return 'Azure VPN CLI not supported on macOS — use the app directly';
+  // macOS: kill openvpn process
+  await runCmd('sudo pkill -f "openvpn.*\\.ovpn"');
+  return null;
 }
 
-async function disconnectAzure(connectionName: string): Promise<string | null> {
-  if (isWindows) {
-    // Same limitation — open the app for user to disconnect
-    await runCommand(`Start-Process "shell:AppsFolder\\Microsoft.AzureVpn_8wekyb3d8bbwe!App"`);
-    return 'Azure VPN app opened — tap Disconnect in the app';
-  }
-  return 'Azure VPN CLI not supported on macOS';
-}
-
-// --- Public API ---
+// ========== PUBLIC API ==========
 
 export async function getProfiles(configs: VpnProfileConfig[]): Promise<VpnProfile[]> {
   const profiles: VpnProfile[] = [];
   for (const cfg of configs) {
     const status = await getStatus(cfg);
-    profiles.push({
-      id: cfg.id,
-      name: cfg.name,
-      type: cfg.type,
-      status,
-    });
+    profiles.push({ id: cfg.id, name: cfg.name, type: cfg.type, status });
   }
   return profiles;
 }
@@ -187,32 +174,22 @@ export async function connectVpn(
   logger.info({ profileId, type: cfg.type }, 'Connecting VPN');
   let error: string | null = null;
 
-  switch (cfg.type) {
-    case 'wireguard':
-      error = await connectWireGuard(cfg.tunnelName || cfg.id);
-      break;
-    case 'openvpn':
-      error = await connectOpenVpn(cfg.profileId || cfg.id);
-      break;
-    case 'azure':
-      error = await connectAzure(cfg.connectionName || cfg.id);
-      break;
+  if (cfg.type === 'wireguard') {
+    error = await connectWireGuard(cfg);
+  } else {
+    // openvpn and azure both use .ovpn via ovpnconnector
+    error = await connectOpenVpn(cfg);
   }
 
   if (error) logger.error({ profileId, error }, 'VPN connect failed');
 
-  // Wait for connection to establish
   await new Promise((r) => setTimeout(r, 3000));
   const profiles = await getProfiles(configs);
 
   if (error) {
     const p = profiles.find((p) => p.id === profileId);
-    if (p) {
-      p.status = 'error';
-      p.error = error.slice(0, 200);
-    }
+    if (p) { p.status = 'error'; p.error = error.slice(0, 200); }
   }
-
   return profiles;
 }
 
@@ -226,16 +203,10 @@ export async function disconnectVpn(
   logger.info({ profileId, type: cfg.type }, 'Disconnecting VPN');
   let error: string | null = null;
 
-  switch (cfg.type) {
-    case 'wireguard':
-      error = await disconnectWireGuard(cfg.tunnelName || cfg.id);
-      break;
-    case 'openvpn':
-      error = await disconnectOpenVpn();
-      break;
-    case 'azure':
-      error = await disconnectAzure(cfg.connectionName || cfg.id);
-      break;
+  if (cfg.type === 'wireguard') {
+    error = await disconnectWireGuard(cfg);
+  } else {
+    error = await disconnectOpenVpn(cfg);
   }
 
   if (error) logger.error({ profileId, error }, 'VPN disconnect failed');
@@ -245,11 +216,7 @@ export async function disconnectVpn(
 
   if (error) {
     const p = profiles.find((p) => p.id === profileId);
-    if (p) {
-      p.status = 'error';
-      p.error = error.slice(0, 200);
-    }
+    if (p) { p.status = 'error'; p.error = error.slice(0, 200); }
   }
-
   return profiles;
 }

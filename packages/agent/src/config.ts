@@ -6,9 +6,8 @@ export interface VpnProfileConfig {
   id: string;
   name: string;
   type: 'wireguard' | 'openvpn' | 'azure';
-  tunnelName?: string;
-  profileId?: string;
-  connectionName?: string;
+  configFile?: string;    // path to .conf/.ovpn — absolute or relative to ~/.crc-agent/vpn/
+  tunnelName?: string;    // WireGuard: tunnel service name (defaults to id)
 }
 
 export interface AgentConfig {
