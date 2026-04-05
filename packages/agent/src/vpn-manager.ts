@@ -34,7 +34,7 @@ function getConfigPath(profile: VpnProfileConfig): string {
 async function getWireGuardStatus(tunnelName: string): Promise<VpnStatus> {
   if (isWindows) {
     const { stdout } = await runCmd(
-      `Get-Service -Name 'WireGuardTunnel$$${tunnelName}' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Status`
+      `Get-Service -Name 'WireGuardTunnel$${tunnelName}' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Status`
     );
     const s = stdout.trim();
     if (s === 'Running') return 'connected';
@@ -91,10 +91,10 @@ async function connectWireGuard(profile: VpnProfileConfig): Promise<string | nul
     }
     // Install tunnel service if not exists, then start
     await runCmd(`& 'C:\\Program Files\\WireGuard\\wireguard.exe' /installtunnelservice '${confPath}'`);
-    const { stdout, stderr } = await runCmd(`net start WireGuardTunnel$$${tunnelName} 2>&1`, 'cmd.exe');
-    const output = stdout + stderr;
-    if (output.includes('successfully') || output.includes('already been started')) return null;
-    return output.trim() || null;
+    await new Promise((r) => setTimeout(r, 1000));
+    const { stderr } = await runCmd(`Start-Service -Name 'WireGuardTunnel$${tunnelName}' -ErrorAction Stop 2>&1`);
+    if (stderr && !stderr.includes('running')) return stderr.trim();
+    return null;
   }
   // macOS
   const { stderr } = await runCmd(`sudo wg-quick up ${confPath}`);
@@ -108,16 +108,25 @@ async function connectOpenVpn(profile: VpnProfileConfig): Promise<string | null>
   }
 
   if (isWindows) {
-    // Use ovpnconnector: set profile path, then start
     const connector = 'C:\\Program Files\\OpenVPN Connect\\ovpnconnector.exe';
+    // Kill GUI app if running (conflicts with ovpnconnector)
+    await runCmd(`Stop-Process -Name 'OpenVPNConnect' -Force -ErrorAction SilentlyContinue`);
+    // Install service if not present
+    await runCmd(`& '${connector}' install 2>&1`);
+    // Stop any existing connection
     await runCmd(`& '${connector}' stop 2>&1`);
-    const { stderr: setErr } = await runCmd(`& '${connector}' set-config profile '${confPath}'`);
-    if (setErr && !setErr.includes('success')) {
-      return `Failed to set profile: ${setErr}`;
+    await new Promise((r) => setTimeout(r, 1000));
+    // Set profile and start
+    const { stdout: setOut, stderr: setErr } = await runCmd(`& '${connector}' set-config profile '${confPath}' 2>&1`);
+    const setOutput = setOut + setErr;
+    if (setOutput.toLowerCase().includes('failed')) {
+      return `Failed to set profile: ${setOutput.trim()}`;
     }
-    const { stderr: startErr, stdout } = await runCmd(`& '${connector}' start 2>&1`);
-    const output = stdout + startErr;
-    if (output.toLowerCase().includes('error')) return output.trim();
+    const { stdout: startOut, stderr: startErr } = await runCmd(`& '${connector}' start 2>&1`);
+    const startOutput = startOut + startErr;
+    if (startOutput.toLowerCase().includes('error') || startOutput.toLowerCase().includes('aborting')) {
+      return startOutput.trim();
+    }
     return null;
   }
   // macOS: run openvpn in background
@@ -158,10 +167,9 @@ async function disconnectAzure(): Promise<string | null> {
 async function disconnectWireGuard(profile: VpnProfileConfig): Promise<string | null> {
   const tunnelName = profile.tunnelName || profile.id;
   if (isWindows) {
-    const { stdout, stderr } = await runCmd(`net stop WireGuardTunnel$$${tunnelName} 2>&1`, 'cmd.exe');
-    const output = stdout + stderr;
-    if (output.includes('successfully') || output.includes('is not started')) return null;
-    return output.trim() || null;
+    const { stderr } = await runCmd(`Stop-Service -Name 'WireGuardTunnel$${tunnelName}' -Force -ErrorAction Stop 2>&1`);
+    if (stderr && !stderr.includes('running') && !stderr.includes('stopped')) return stderr.trim();
+    return null;
   }
   const confPath = getConfigPath(profile);
   const { stderr } = await runCmd(`sudo wg-quick down ${confPath}`);
