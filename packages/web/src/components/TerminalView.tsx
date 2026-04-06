@@ -206,7 +206,7 @@ export default function TerminalView({ socket }: TerminalViewProps) {
     if (!initialCmd || !sessionId || cmdSentRef.current) return;
     cmdSentRef.current = true;
     const timer = setTimeout(() => {
-      write(initialCmd + '\n');
+      write(initialCmd + '\r');
     }, 500);
     return () => clearTimeout(timer);
   }, [initialCmd, sessionId, write]);
@@ -283,7 +283,7 @@ export default function TerminalView({ socket }: TerminalViewProps) {
 
   const handleComposeSend = useCallback(() => {
     if (!composeText) return;
-    write(composeText + '\n');
+    write(composeText + '\r');
     setComposeText('');
     composeRef.current?.focus();
   }, [composeText, write]);
@@ -361,6 +361,11 @@ export default function TerminalView({ socket }: TerminalViewProps) {
       <div className="flex-1 overflow-hidden relative">
         <div ref={termContainerRef} className="absolute inset-0 pl-2" />
 
+        {/* Touch-blocking overlay — prevents soft keyboard from opening on terminal tap */}
+        {!rawMode && (
+          <div className="absolute inset-0 z-[5]" onClick={() => composeRef.current?.focus()} />
+        )}
+
         {/* File explorer overlay */}
         {showFiles && (
           <div className="absolute inset-0 md:left-auto md:w-80 z-10">
@@ -378,39 +383,47 @@ export default function TerminalView({ socket }: TerminalViewProps) {
       {/* Download notifications */}
       <FileNotifications downloads={downloads} onDismiss={dismissDownload} />
 
-      {/* Compose input — primary input method */}
+      {/* Compose input — chat-style primary input */}
       {!rawMode && (
-        <div className="flex items-end gap-1.5 px-2 py-1.5 bg-surface border-t border-border flex-shrink-0">
-          <textarea
-            ref={composeRef}
-            value={composeText}
-            onChange={(e) => setComposeText(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                handleComposeSend();
-              }
-            }}
-            placeholder="Type or paste here... (Enter to send, Shift+Enter for newline)"
-            rows={composeText.includes('\n') ? Math.min(composeText.split('\n').length, 5) : 1}
-            className="flex-1 px-3 py-2 text-sm bg-surface-deep border border-border rounded-xl text-text placeholder:text-text-muted focus:outline-none focus:border-accent resize-none leading-relaxed"
-          />
-          <div className="flex flex-col gap-1 flex-shrink-0">
+        <div className="px-2 py-2 bg-surface border-t border-border flex-shrink-0">
+          <div className="flex items-end gap-2">
+            <textarea
+              ref={composeRef}
+              value={composeText}
+              onChange={(e) => setComposeText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  handleComposeSend();
+                }
+              }}
+              placeholder="Type a command..."
+              rows={composeText.includes('\n') ? Math.min(composeText.split('\n').length, 5) : 1}
+              className="flex-1 px-4 py-2.5 text-sm bg-surface-deep border border-border rounded-2xl text-text placeholder:text-text-muted focus:outline-none focus:border-accent resize-none leading-relaxed"
+              autoFocus
+            />
             <button
               onClick={handleComposeSend}
               disabled={!composeText}
-              className="px-3 py-1.5 text-xs bg-accent hover:bg-accent-hover text-white rounded-lg transition-colors disabled:opacity-30"
+              className="p-2.5 bg-accent hover:bg-accent-hover text-white rounded-2xl transition-colors disabled:opacity-30 flex-shrink-0"
+              title="Send (Enter)"
             >
-              Send
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="22" y1="2" x2="11" y2="13" />
+                <polygon points="22 2 15 22 11 13 2 9 22 2" />
+              </svg>
             </button>
+          </div>
+          <div className="flex items-center gap-2 mt-1.5 px-1">
             <button
               onClick={handleComposeRaw}
               disabled={!composeText}
-              className="px-3 py-1.5 text-xs bg-surface-raised hover:bg-surface-overlay border border-border-subtle text-text-secondary rounded-lg transition-colors disabled:opacity-30"
-              title="Send without Enter (raw paste)"
+              className="text-[10px] text-text-muted hover:text-text-secondary disabled:opacity-30 transition-colors"
             >
-              Raw
+              Send raw (no enter)
             </button>
+            <span className="text-[10px] text-text-muted/50">|</span>
+            <span className="text-[10px] text-text-muted/50">Shift+Enter for newline</span>
           </div>
         </div>
       )}
