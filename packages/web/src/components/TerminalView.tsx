@@ -201,12 +201,25 @@ export default function TerminalView({ socket }: TerminalViewProps) {
     }, 50);
   }, [rawMode, resize]);
 
-  // Detect project path from initial command (cd "/path" && claude)
+  // Detect project path from ?cmd= param or restore from localStorage
   useEffect(() => {
-    if (!initialCmd) return;
-    const match = initialCmd.match(/cd\s+"?([^"&]+)"?\s*&&/);
-    if (match) convProjectRef.current = match[1];
+    if (initialCmd) {
+      const match = initialCmd.match(/cd\s+"?([^"&]+)"?\s*&&/);
+      if (match) convProjectRef.current = match[1];
+    }
   }, [initialCmd]);
+
+  // Once sessionId is known, save or restore the project path
+  useEffect(() => {
+    if (!sessionId) return;
+    const storageKey = `conv-project-${sessionId}`;
+    if (convProjectRef.current) {
+      localStorage.setItem(storageKey, convProjectRef.current);
+    } else {
+      const saved = localStorage.getItem(storageKey);
+      if (saved) convProjectRef.current = saved;
+    }
+  }, [sessionId]);
 
   // Poll JSONL conversation file every 2 seconds
   useEffect(() => {
