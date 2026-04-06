@@ -22,6 +22,8 @@ import {
   VPN_UPDATE,
   CLAUDE_SESSIONS_LIST,
   CLAUDE_SESSIONS_RESULT,
+  AGENT_EXEC,
+  AGENT_EXEC_RESULT,
   HEARTBEAT_INTERVAL,
   type TerminalOpenPayload,
   type TerminalInputPayload,
@@ -34,6 +36,7 @@ import {
   type VpnConnectPayload,
   type VpnDisconnectPayload,
   type ClaudeSessionsListPayload,
+  type AgentExecPayload,
 } from '@crc/shared';
 
 import { loadConfig } from './config.js';
@@ -184,6 +187,26 @@ socket.on(VPN_CONNECT, async (payload: VpnConnectPayload) => {
 socket.on(VPN_DISCONNECT, async (payload: VpnDisconnectPayload) => {
   const profiles = await disconnectVpn(vpnProfiles, payload.profileId);
   socket.emit(VPN_UPDATE, { profiles });
+});
+
+// --- Agent exec handler (one-shot commands like git pull) ---
+socket.on(AGENT_EXEC, async (payload: AgentExecPayload) => {
+  const { requestId, command, cwd } = payload;
+  if (!requestId) return;
+  const { exec } = await import('child_process');
+  const { promisify } = await import('util');
+  const execAsync = promisify(exec);
+  try {
+    const { stdout, stderr } = await execAsync(command, { cwd, timeout: 30000 });
+    socket.emit(AGENT_EXEC_RESULT, { requestId, stdout: stdout || '', stderr: stderr || '' });
+  } catch (err: any) {
+    socket.emit(AGENT_EXEC_RESULT, {
+      requestId,
+      stdout: err.stdout || '',
+      stderr: err.stderr || '',
+      error: err.message,
+    });
+  }
 });
 
 // --- Claude Sessions handler ---

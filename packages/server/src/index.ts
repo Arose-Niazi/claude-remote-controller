@@ -51,6 +51,8 @@ import {
   VPN_UPDATE,
   CLAUDE_SESSIONS_LIST,
   CLAUDE_SESSIONS_RESULT,
+  AGENT_EXEC,
+  AGENT_EXEC_RESULT,
   type FilesListPayload,
   type FilesListResultPayload,
   type FilesDownloadPayload,
@@ -61,6 +63,8 @@ import {
   type VpnUpdatePayload,
   type ClaudeSessionsListPayload,
   type ClaudeSessionsResultPayload,
+  type AgentExecPayload,
+  type AgentExecResultPayload,
 } from '@crc/shared';
 
 import { config } from './config.js';
@@ -218,6 +222,11 @@ agentNs.on('connection', (socket) => {
     clientNs.emit(CLAUDE_SESSIONS_RESULT, { ...payload, agentId });
   });
 
+  // --- Agent exec relay (agent -> client) ---
+  socket.on(AGENT_EXEC_RESULT, (payload: AgentExecResultPayload) => {
+    clientNs.emit(AGENT_EXEC_RESULT, payload);
+  });
+
   socket.on(SESSION_BUFFER, (payload: SessionBufferPayload) => {
     const session = getSession(payload.sessionId);
     if (!session || !session.clientSocketId) return;
@@ -371,6 +380,18 @@ clientNs.on('connection', (socket) => {
     if (!agentId) return;
     const agentSocketId = getAgentSocketId(agentId);
     if (agentSocketId) agentNs.to(agentSocketId).emit(CLAUDE_SESSIONS_LIST, { projectPath });
+  });
+
+  // --- Agent exec relay (client -> agent) ---
+  socket.on(AGENT_EXEC, (payload: AgentExecPayload) => {
+    const { agentId, ...rest } = payload;
+    if (!agentId) return;
+    const agentSocketId = getAgentSocketId(agentId);
+    if (agentSocketId) {
+      const { v4: uuid } = require('uuid');
+      const requestId = uuid();
+      agentNs.to(agentSocketId).emit(AGENT_EXEC, { ...rest, requestId });
+    }
   });
 
   // --- File explorer relay (client -> agent) ---

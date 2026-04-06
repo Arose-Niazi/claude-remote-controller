@@ -54,6 +54,12 @@ export const FILES_DOWNLOAD = 'files:download' as const;
 export const FILES_LIST_RESULT = 'files:list:result' as const;
 export const FILES_DOWNLOAD_READY = 'files:download:ready' as const;
 
+// --- Agent Exec (one-shot command) ---
+// Client -> Server -> Agent
+export const AGENT_EXEC = 'agent:exec' as const;
+// Agent -> Server -> Client
+export const AGENT_EXEC_RESULT = 'agent:exec:result' as const;
+
 // --- Claude Sessions Events ---
 // Client -> Server
 export const CLAUDE_SESSIONS_LIST = 'claude:sessions:list' as const;
@@ -169,6 +175,22 @@ export interface VpnDisconnectPayload {
 export interface VpnUpdatePayload {
   agentId?: string;
   profiles: import('./types.js').VpnProfile[];
+}
+
+// --- Agent Exec Payloads ---
+
+export interface AgentExecPayload {
+  agentId?: string;
+  requestId?: string;
+  command: string;
+  cwd: string;
+}
+
+export interface AgentExecResultPayload {
+  requestId: string;
+  stdout: string;
+  stderr: string;
+  error?: string;
 }
 
 // --- Claude Sessions Payloads ---

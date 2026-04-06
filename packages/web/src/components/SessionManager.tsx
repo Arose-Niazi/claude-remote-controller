@@ -6,6 +6,8 @@ import type { TerminalSession } from '@crc/shared';
 import { useSessionStore } from '../stores/sessionStore';
 import VpnPanel from './VpnPanel';
 import ClaudeSessions from './ClaudeSessions';
+import FileExplorer from './FileExplorer';
+import { useAgentStore } from '../stores/agentStore';
 
 interface SessionManagerProps {
   socket: Socket | null;
@@ -27,6 +29,10 @@ export default function SessionManager({ socket }: SessionManagerProps) {
   const [newName, setNewName] = useState('');
   const [showVpn, setShowVpn] = useState(false);
   const [showClaude, setShowClaude] = useState(false);
+  const [showBrowse, setShowBrowse] = useState(false);
+  const agents = useAgentStore((s) => s.agents);
+  const agent = agents.find((a) => a.id === agentId);
+  const browseInitialPath = agent?.homeDirectory || '/';
 
   const agentSessions = sessions.filter((s) => s.agentId === agentId);
 
@@ -74,6 +80,12 @@ export default function SessionManager({ socket }: SessionManagerProps) {
         </div>
         <div className="flex gap-2">
           <button
+            onClick={() => setShowBrowse(true)}
+            className="px-3 py-1.5 text-sm bg-slate-700 hover:bg-slate-600 rounded transition-colors"
+          >
+            Browse
+          </button>
+          <button
             onClick={() => setShowClaude(true)}
             className="px-3 py-1.5 text-sm bg-purple-700 hover:bg-purple-600 rounded transition-colors"
           >
@@ -94,6 +106,25 @@ export default function SessionManager({ socket }: SessionManagerProps) {
 
       {showClaude && agentId && (
         <ClaudeSessions socket={socket} agentId={agentId} onClose={() => setShowClaude(false)} />
+      )}
+
+      {showBrowse && agentId && (
+        <div className="fixed inset-0 z-50 bg-slate-900/80 flex items-center justify-center p-4">
+          <div className="bg-slate-800 border border-slate-700 rounded-xl w-full max-w-lg shadow-2xl h-[80vh] overflow-hidden">
+            <FileExplorer
+              socket={socket}
+              agentId={agentId}
+              initialPath={browseInitialPath}
+              onClose={() => setShowBrowse(false)}
+              onDownloadReady={() => {}}
+              onStartClaude={(path) => {
+                setShowBrowse(false);
+                const cmd = `cd ${JSON.stringify(path)} && claude`;
+                navigate(`/terminal/${agentId}/new?cmd=${encodeURIComponent(cmd)}`);
+              }}
+            />
+          </div>
+        </div>
       )}
 
       <button

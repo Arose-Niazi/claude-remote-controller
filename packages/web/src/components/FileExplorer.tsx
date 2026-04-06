@@ -5,8 +5,10 @@ import {
   FILES_LIST_RESULT,
   FILES_DOWNLOAD,
   FILES_DOWNLOAD_READY,
+  AGENT_EXEC,
+  AGENT_EXEC_RESULT,
 } from '@crc/shared';
-import type { FileEntry, FilesListResultPayload, FilesDownloadReadyPayload } from '@crc/shared';
+import type { FileEntry, FilesListResultPayload, FilesDownloadReadyPayload, AgentExecResultPayload } from '@crc/shared';
 
 interface FileExplorerProps {
   socket: Socket | null;
@@ -14,6 +16,7 @@ interface FileExplorerProps {
   initialPath: string;
   onClose: () => void;
   onDownloadReady: (info: { fileName: string; downloadUrl: string; size: number }) => void;
+  onStartClaude?: (path: string) => void;
 }
 
 function formatSize(bytes: number): string {
@@ -30,6 +33,7 @@ export default function FileExplorer({
   initialPath,
   onClose,
   onDownloadReady,
+  onStartClaude,
 }: FileExplorerProps) {
   const [currentPath, setCurrentPath] = useState(initialPath);
   const [hasNavigated, setHasNavigated] = useState(false);
@@ -37,6 +41,36 @@ export default function FileExplorer({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [copiedName, setCopiedName] = useState<string | null>(null);
+  const [gitPullStatus, setGitPullStatus] = useState<'idle' | 'pulling' | 'done' | 'error'>('idle');
+  const [gitPullMsg, setGitPullMsg] = useState('');
+
+  const isGitRepo = entries.some((e) => e.isDirectory && e.name === '.git');
+
+  const handleGitPull = () => {
+    if (!socket) return;
+    setGitPullStatus('pulling');
+    setGitPullMsg('');
+    socket.emit(AGENT_EXEC, { agentId, command: 'git pull', cwd: currentPath });
+  };
+
+  useEffect(() => {
+    if (!socket) return;
+    const handleExecResult = (payload: AgentExecResultPayload) => {
+      const output = (payload.stdout + payload.stderr).trim();
+      if (payload.error) {
+        setGitPullStatus('error');
+        setGitPullMsg(output || payload.error);
+      } else {
+        setGitPullStatus('done');
+        setGitPullMsg(output.split('\n').slice(0, 3).join('\n'));
+        // Refresh directory listing
+        loadDirectory(currentPath);
+      }
+      setTimeout(() => setGitPullStatus('idle'), 4000);
+    };
+    socket.on(AGENT_EXEC_RESULT, handleExecResult);
+    return () => { socket.off(AGENT_EXEC_RESULT, handleExecResult); };
+  }, [socket, currentPath]);
 
   // Sync to initialPath when heartbeat arrives with the real homeDir
   // (only if user hasn't manually navigated yet)
@@ -145,13 +179,47 @@ export default function FileExplorer({
         <span className="text-xs text-slate-400 truncate flex-1">
           {currentPath}
         </span>
-        <button
-          onClick={onClose}
-          className="ml-2 px-2 py-0.5 text-xs bg-slate-700 hover:bg-slate-600 rounded"
-        >
-          x
-        </button>
+        <div className="flex items-center gap-1 ml-2 flex-shrink-0">
+          {onStartClaude && (
+            <button
+              onClick={() => onStartClaude(currentPath)}
+              className="px-2 py-0.5 text-xs bg-purple-700 hover:bg-purple-600 text-white rounded"
+              title="Start Claude here"
+            >
+              Claude
+            </button>
+          )}
+          {isGitRepo && (
+            <button
+              onClick={handleGitPull}
+              disabled={gitPullStatus === 'pulling'}
+              className={`px-2 py-0.5 text-xs rounded ${
+                gitPullStatus === 'done' ? 'bg-green-700 text-white' :
+                gitPullStatus === 'error' ? 'bg-red-700 text-white' :
+                'bg-orange-700 hover:bg-orange-600 text-white'
+              } disabled:opacity-50`}
+              title="Git pull"
+            >
+              {gitPullStatus === 'pulling' ? '...' : gitPullStatus === 'done' ? 'Pulled' : gitPullStatus === 'error' ? 'Err' : 'Pull'}
+            </button>
+          )}
+          <button
+            onClick={onClose}
+            className="px-2 py-0.5 text-xs bg-slate-700 hover:bg-slate-600 rounded"
+          >
+            x
+          </button>
+        </div>
       </div>
+
+      {/* Git pull feedback */}
+      {gitPullMsg && (
+        <div className={`px-3 py-1.5 text-xs border-b border-slate-700 ${
+          gitPullStatus === 'error' ? 'bg-red-900/30 text-red-300' : 'bg-green-900/30 text-green-300'
+        }`}>
+          <pre className="whitespace-pre-wrap font-mono">{gitPullMsg}</pre>
+        </div>
+      )}
 
       {/* Breadcrumb */}
       <div className="flex items-center gap-0.5 px-3 py-1.5 text-xs text-slate-400 overflow-x-auto border-b border-slate-800 flex-shrink-0">
