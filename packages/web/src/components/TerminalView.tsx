@@ -35,10 +35,11 @@ export default function TerminalView({ socket }: TerminalViewProps) {
   const [uploading, setUploading] = useState(false);
   const [copyLabel, setCopyLabel] = useState('Copy');
   const [showFiles, setShowFiles] = useState(false);
+  const [rawMode, setRawMode] = useState(false);
   const [ctrlActive, setCtrlActive] = useState(false);
   const [altActive, setAltActive] = useState(false);
   const [composeText, setComposeText] = useState('');
-  const composeRef = useRef<HTMLInputElement>(null);
+  const composeRef = useRef<HTMLTextAreaElement>(null);
   const ctrlRef = useRef(false);
   const altRef = useRef(false);
   const [downloads, setDownloads] = useState<
@@ -49,8 +50,6 @@ export default function TerminalView({ socket }: TerminalViewProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const agent = agents.find((a) => a.id === agentId);
-  // Use agent's homeDirectory from heartbeat (which already respects homeDir config)
-  // Fall back to root paths or / if heartbeat hasn't arrived yet
   const initialPath = agent?.homeDirectory || agent?.rootPaths?.[0] || '/';
 
   const {
@@ -88,12 +87,12 @@ export default function TerminalView({ socket }: TerminalViewProps) {
   useEffect(() => {
     if (!termContainerRef.current) return;
 
-    // Smaller font on mobile to get ~80 columns on a phone screen
     const isMobile = window.innerWidth < 768;
     const term = new Terminal({
       cursorBlink: true,
       fontSize: isMobile ? 11 : 14,
       fontFamily: 'Menlo, Monaco, "Cascadia Code", monospace',
+      disableStdin: false,
       theme: {
         background: '#1a1a1e',
         foreground: '#e8e4e0',
@@ -172,6 +171,20 @@ export default function TerminalView({ socket }: TerminalViewProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Toggle xterm keyboard capture based on rawMode
+  useEffect(() => {
+    const term = termRef.current;
+    if (!term) return;
+    if (rawMode) {
+      term.options.disableStdin = false;
+      term.focus();
+    } else {
+      term.options.disableStdin = true;
+      // Blur terminal so mobile keyboard hides
+      (term as any).textarea?.blur();
+    }
+  }, [rawMode]);
+
   // Wire up terminal output
   useEffect(() => {
     if (!socket || !termRef.current) return;
@@ -192,7 +205,6 @@ export default function TerminalView({ socket }: TerminalViewProps) {
   useEffect(() => {
     if (!initialCmd || !sessionId || cmdSentRef.current) return;
     cmdSentRef.current = true;
-    // Wait for shell prompt to appear
     const timer = setTimeout(() => {
       write(initialCmd + '\n');
     }, 500);
@@ -212,9 +224,9 @@ export default function TerminalView({ socket }: TerminalViewProps) {
   const handleMobileKey = useCallback(
     (data: string) => {
       write(data);
-      termRef.current?.focus();
+      if (rawMode) termRef.current?.focus();
     },
-    [write]
+    [write, rawMode]
   );
 
   const handleCopy = useCallback(() => {
@@ -269,6 +281,20 @@ export default function TerminalView({ socket }: TerminalViewProps) {
     setDownloads((prev) => prev.filter((d) => d.id !== id));
   }, []);
 
+  const handleComposeSend = useCallback(() => {
+    if (!composeText) return;
+    write(composeText + '\n');
+    setComposeText('');
+    composeRef.current?.focus();
+  }, [composeText, write]);
+
+  const handleComposeRaw = useCallback(() => {
+    if (!composeText) return;
+    write(composeText);
+    setComposeText('');
+    composeRef.current?.focus();
+  }, [composeText, write]);
+
   return (
     <div className="flex flex-col h-[calc(100vh-52px)]">
       <input
@@ -278,7 +304,7 @@ export default function TerminalView({ socket }: TerminalViewProps) {
         onChange={handleUpload}
       />
 
-      {/* Toolbar -- single line, scrollable on small screens */}
+      {/* Toolbar */}
       <div className="flex items-center gap-2 px-2 py-1.5 bg-surface border-b border-border overflow-x-auto flex-shrink-0">
         <button
           onClick={handleDetach}
@@ -312,6 +338,17 @@ export default function TerminalView({ socket }: TerminalViewProps) {
             {uploading ? '...' : 'Up'}
           </button>
           <button
+            onClick={() => setRawMode((p) => !p)}
+            className={`px-2 py-1 text-xs rounded-lg transition-colors whitespace-nowrap ${
+              rawMode
+                ? 'bg-accent text-white'
+                : 'bg-surface-raised hover:bg-surface-overlay border border-border-subtle text-text-secondary'
+            }`}
+            title="Toggle raw terminal mode (direct keyboard input)"
+          >
+            TTY
+          </button>
+          <button
             onClick={handleKill}
             className="px-2 py-1 text-xs bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded-lg transition-colors whitespace-nowrap"
           >
@@ -320,11 +357,11 @@ export default function TerminalView({ socket }: TerminalViewProps) {
         </div>
       </div>
 
-      {/* Main area: terminal (always full width) */}
+      {/* Terminal output area */}
       <div className="flex-1 overflow-hidden relative">
         <div ref={termContainerRef} className="absolute inset-0 pl-2" />
 
-        {/* File explorer: full-screen overlay on mobile, side panel on desktop */}
+        {/* File explorer overlay */}
         {showFiles && (
           <div className="absolute inset-0 md:left-auto md:w-80 z-10">
             <FileExplorer
@@ -341,52 +378,44 @@ export default function TerminalView({ socket }: TerminalViewProps) {
       {/* Download notifications */}
       <FileNotifications downloads={downloads} onDismiss={dismissDownload} />
 
-      {/* Compose input — type/paste text locally, send on Enter */}
-      <div className="flex items-center gap-1 px-2 py-1 bg-surface border-t border-border flex-shrink-0">
-        <input
-          ref={composeRef}
-          type="text"
-          value={composeText}
-          onChange={(e) => setComposeText(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && composeText) {
-              write(composeText + '\n');
-              setComposeText('');
-            }
-          }}
-          placeholder="Type or paste text..."
-          className="flex-1 px-3 py-1.5 text-xs bg-surface-deep border border-border rounded-lg text-text placeholder:text-text-muted focus:outline-none focus:border-accent"
-        />
-        <button
-          onClick={() => {
-            if (composeText) {
-              write(composeText + '\n');
-              setComposeText('');
-              composeRef.current?.focus();
-            }
-          }}
-          disabled={!composeText}
-          className="px-3 py-1.5 text-xs bg-accent hover:bg-accent-hover text-white rounded-lg transition-colors disabled:opacity-30 flex-shrink-0"
-        >
-          Send
-        </button>
-        <button
-          onClick={() => {
-            if (composeText) {
-              write(composeText);
-              setComposeText('');
-              composeRef.current?.focus();
-            }
-          }}
-          disabled={!composeText}
-          className="px-2 py-1.5 text-xs bg-surface-raised hover:bg-surface-overlay border border-border-subtle text-text-secondary rounded-lg transition-colors disabled:opacity-30 flex-shrink-0"
-          title="Send without Enter (raw paste)"
-        >
-          Raw
-        </button>
-      </div>
+      {/* Compose input — primary input method */}
+      {!rawMode && (
+        <div className="flex items-end gap-1.5 px-2 py-1.5 bg-surface border-t border-border flex-shrink-0">
+          <textarea
+            ref={composeRef}
+            value={composeText}
+            onChange={(e) => setComposeText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                handleComposeSend();
+              }
+            }}
+            placeholder="Type or paste here... (Enter to send, Shift+Enter for newline)"
+            rows={composeText.includes('\n') ? Math.min(composeText.split('\n').length, 5) : 1}
+            className="flex-1 px-3 py-2 text-sm bg-surface-deep border border-border rounded-xl text-text placeholder:text-text-muted focus:outline-none focus:border-accent resize-none leading-relaxed"
+          />
+          <div className="flex flex-col gap-1 flex-shrink-0">
+            <button
+              onClick={handleComposeSend}
+              disabled={!composeText}
+              className="px-3 py-1.5 text-xs bg-accent hover:bg-accent-hover text-white rounded-lg transition-colors disabled:opacity-30"
+            >
+              Send
+            </button>
+            <button
+              onClick={handleComposeRaw}
+              disabled={!composeText}
+              className="px-3 py-1.5 text-xs bg-surface-raised hover:bg-surface-overlay border border-border-subtle text-text-secondary rounded-lg transition-colors disabled:opacity-30"
+              title="Send without Enter (raw paste)"
+            >
+              Raw
+            </button>
+          </div>
+        </div>
+      )}
 
-      {/* Mobile extra keys */}
+      {/* Mobile extra keys — always visible for Ctrl+C etc */}
       <MobileKeyboard
         onKey={handleMobileKey}
         ctrlActive={ctrlActive}
