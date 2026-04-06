@@ -83,77 +83,77 @@ export default function ClaudeSessions({ socket, agentId, onClose }: ClaudeSessi
   );
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-900/80 flex items-center justify-center p-4">
-      <div className="bg-slate-800 border border-slate-700 rounded-xl w-full max-w-lg shadow-2xl max-h-[85vh] flex flex-col">
+    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+      <div className="bg-surface border border-border rounded-2xl w-full max-w-lg shadow-2xl max-h-[85vh] flex flex-col">
         {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-slate-700 flex-shrink-0">
-          <h3 className="text-sm font-semibold">Claude Sessions</h3>
+        <div className="flex items-center justify-between px-4 py-3 border-b border-border flex-shrink-0">
+          <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider">Claude Sessions</h3>
           <button
             onClick={onClose}
-            className="text-xs px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded"
+            className="text-xs px-2.5 py-1 bg-surface-raised hover:bg-surface-overlay border border-border text-text-secondary rounded-lg transition-colors"
           >
             Close
           </button>
         </div>
 
         {/* Search */}
-        <div className="px-4 py-2 border-b border-slate-700 flex-shrink-0">
+        <div className="px-4 py-2 border-b border-border flex-shrink-0">
           <input
             type="text"
             placeholder="Filter projects or messages..."
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
-            className="w-full px-3 py-1.5 text-xs bg-slate-900 border border-slate-600 rounded focus:outline-none focus:border-blue-500"
+            className="w-full px-3 py-1.5 text-xs bg-surface-deep border border-border text-text rounded-lg focus:outline-none focus:border-claude placeholder:text-text-muted"
           />
         </div>
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-3 space-y-3">
           {loading && (
-            <div className="text-center text-slate-400 text-sm py-8">
+            <div className="text-center text-text-muted text-sm py-8">
               Scanning Claude sessions...
             </div>
           )}
 
           {!loading && sessions.length === 0 && (
-            <div className="text-center text-slate-400 text-sm py-8">
+            <div className="text-center text-text-muted text-sm py-8">
               No Claude sessions found.
               <br />
-              <span className="text-xs text-slate-500">
+              <span className="text-xs text-text-muted">
                 Run claude in a project directory first.
               </span>
             </div>
           )}
 
           {filteredProjects.map(([path, items]) => (
-            <div key={path} className="rounded-lg border border-slate-700 bg-slate-900/50 overflow-hidden">
+            <div key={path} className="bg-surface-deep rounded-xl border border-border-subtle overflow-hidden">
               {/* Project header */}
-              <div className="flex items-center justify-between px-3 py-2 bg-slate-800/50">
-                <span className="text-xs font-medium text-blue-400 truncate">{projectName(path)}</span>
+              <div className="flex items-center justify-between px-3 py-2 bg-surface-raised/50">
+                <span className="text-xs font-medium text-claude truncate">{projectName(path)}</span>
                 <button
                   onClick={() => handleNewClaude(path)}
-                  className="text-xs px-2 py-0.5 bg-green-700 hover:bg-green-600 text-white rounded flex-shrink-0 ml-2"
+                  className="text-xs px-2.5 py-0.5 bg-accent hover:bg-accent-hover text-white rounded-lg flex-shrink-0 ml-2 transition-colors"
                 >
                   New
                 </button>
               </div>
 
               {/* Sessions */}
-              <div className="divide-y divide-slate-700/50">
+              <div className="divide-y divide-border-subtle">
                 {items.map((s) => (
-                  <div key={s.sessionId} className="px-3 py-2 hover:bg-slate-800/30">
+                  <div key={s.sessionId} className="px-3 py-2 hover:bg-surface-raised/30 transition-colors">
                     <div className="flex items-start justify-between gap-2">
-                      <p className="text-xs text-slate-300 line-clamp-2 flex-1">
+                      <p className="text-xs text-text-secondary line-clamp-2 flex-1">
                         {s.firstMessage}
                       </p>
                       <button
                         onClick={() => handleResume(s)}
-                        className="text-xs px-2 py-0.5 bg-blue-600 hover:bg-blue-500 text-white rounded flex-shrink-0"
+                        className="text-xs px-2.5 py-0.5 bg-claude hover:bg-claude-hover text-white rounded-lg flex-shrink-0 transition-colors"
                       >
                         Resume
                       </button>
                     </div>
-                    <div className="flex items-center gap-2 mt-1 text-xs text-slate-500">
+                    <div className="flex items-center gap-2 mt-1 text-xs text-text-muted">
                       <span>{timeAgo(s.lastTimestamp)}</span>
                       {s.model && <span>{shortModel(s.model)}</span>}
                       <span>{s.messageCount} msgs</span>

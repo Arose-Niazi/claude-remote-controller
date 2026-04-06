@@ -35,17 +35,24 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-900 flex items-center justify-center px-4">
+    <div className="min-h-screen bg-surface-deep flex items-center justify-center px-4">
       <form
         onSubmit={handleSubmit}
-        className="w-full max-w-sm bg-slate-800 rounded-xl p-6 shadow-2xl border border-slate-700"
+        className="w-full max-w-sm bg-surface rounded-2xl p-8 shadow-2xl border border-border"
       >
-        <h1 className="text-xl font-semibold text-center mb-6 text-slate-100">
-          Remote Controller
-        </h1>
+        <div className="flex justify-center mb-6">
+          <div className="w-12 h-12 rounded-2xl bg-accent/10 flex items-center justify-center">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" className="text-accent">
+              <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="1.5"/>
+              <path d="M8 12h8M12 8v8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+            </svg>
+          </div>
+        </div>
+        <h1 className="text-xl font-semibold text-center mb-1">Claude Remote</h1>
+        <p className="text-sm text-text-secondary text-center mb-6">Sign in to your machines</p>
 
         {error && (
-          <div className="mb-4 p-3 bg-red-900/40 border border-red-700 rounded text-red-300 text-sm">
+          <div className="mb-4 p-3 bg-red-500/10 border border-red-500/20 rounded-lg text-red-400 text-sm">
             {error}
           </div>
         )}
@@ -56,13 +63,13 @@ export default function LoginPage() {
           onChange={(e) => setPassword(e.target.value)}
           placeholder="Password"
           autoFocus
-          className="w-full px-4 py-3 bg-slate-700 border border-slate-600 rounded-lg text-slate-100 placeholder-slate-400 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 mb-4"
+          className="w-full px-4 py-3 bg-surface-raised border border-border rounded-xl text-text placeholder-text-muted focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent/50 mb-4 transition-colors"
         />
 
         <button
           type="submit"
           disabled={loading || !password}
-          className="w-full py-3 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-600 disabled:cursor-not-allowed rounded-lg font-medium transition-colors"
+          className="w-full py-3 bg-accent hover:bg-accent-hover disabled:bg-surface-raised disabled:text-text-muted disabled:cursor-not-allowed rounded-xl font-medium transition-all text-white"
         >
           {loading ? 'Connecting...' : 'Connect'}
         </button>

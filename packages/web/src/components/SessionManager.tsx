@@ -73,28 +73,28 @@ export default function SessionManager({ socket }: SessionManagerProps) {
         <div className="flex items-center gap-3">
           <button
             onClick={() => navigate('/dashboard')}
-            className="px-3 py-1 text-sm bg-slate-700 hover:bg-slate-600 rounded transition-colors"
+            className="px-3 py-1 text-sm bg-surface-raised hover:bg-surface-overlay border border-border text-text-secondary rounded-lg transition-colors"
           >
             ← Back
           </button>
-          <h2 className="text-lg font-medium">Sessions on {agentId}</h2>
+          <h2 className="text-lg font-medium text-text">{agentId}</h2>
         </div>
         <div className="flex gap-2">
           <button
             onClick={() => setShowBrowse(true)}
-            className="px-3 py-1.5 text-sm bg-slate-700 hover:bg-slate-600 rounded transition-colors"
+            className="px-3 py-1.5 text-sm bg-surface-raised hover:bg-surface-overlay border border-border text-text-secondary rounded-lg transition-colors"
           >
             Browse
           </button>
           <button
             onClick={() => setShowClaude(true)}
-            className="px-3 py-1.5 text-sm bg-purple-700 hover:bg-purple-600 rounded transition-colors"
+            className="px-3 py-1.5 text-sm bg-claude hover:bg-claude-hover text-white rounded-xl transition-colors"
           >
             Claude
           </button>
           <button
             onClick={() => setShowVpn(true)}
-            className="px-3 py-1.5 text-sm bg-slate-700 hover:bg-slate-600 rounded transition-colors"
+            className="px-3 py-1.5 text-sm bg-surface-raised hover:bg-surface-overlay border border-border text-text-secondary rounded-lg transition-colors"
           >
             VPN
           </button>
@@ -110,8 +110,8 @@ export default function SessionManager({ socket }: SessionManagerProps) {
       )}
 
       {showBrowse && agentId && (
-        <div className="fixed inset-0 z-50 bg-slate-900/80 flex items-center justify-center p-4">
-          <div className="bg-slate-800 border border-slate-700 rounded-xl w-full max-w-lg shadow-2xl h-[80vh] overflow-hidden">
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-surface border border-border rounded-2xl w-full max-w-lg shadow-2xl h-[80vh] overflow-hidden">
             <FileExplorer
               socket={socket}
               agentId={agentId}
@@ -134,11 +134,11 @@ export default function SessionManager({ socket }: SessionManagerProps) {
 
       {/* Permission mode prompt when starting Claude in a new project */}
       {permPrompt && agentId && (
-        <div className="fixed inset-0 z-50 bg-slate-900/80 flex items-center justify-center p-4">
-          <div className="bg-slate-800 border border-slate-700 rounded-xl w-full max-w-sm shadow-2xl p-5">
-            <h3 className="text-sm font-semibold mb-1">Setup Claude</h3>
-            <p className="text-xs text-slate-400 mb-4">
-              No <code>.claude/settings.json</code> found in this project. Choose a permission mode:
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-surface border border-border rounded-2xl w-full max-w-sm shadow-2xl p-5">
+            <h3 className="text-sm font-semibold text-text mb-1">Setup Claude</h3>
+            <p className="text-xs text-text-muted mb-4">
+              No <code className="text-accent">.claude/settings.json</code> found in this project. Choose a permission mode:
             </p>
             <div className="space-y-2">
               {[
@@ -168,16 +168,16 @@ export default function SessionManager({ socket }: SessionManagerProps) {
                     };
                     socket?.on(AGENT_EXEC_RESULT, onResult);
                   }}
-                  className="w-full text-left px-4 py-3 rounded-lg border border-slate-600 hover:border-blue-500 hover:bg-slate-700/50 transition-colors"
+                  className="w-full text-left px-4 py-3 rounded-xl border border-border-subtle bg-surface-raised hover:border-accent hover:bg-surface-overlay transition-colors"
                 >
-                  <div className="text-sm font-medium">{label}</div>
-                  <div className="text-xs text-slate-400">{desc}</div>
+                  <div className="text-sm font-medium text-text">{label}</div>
+                  <div className="text-xs text-text-muted">{desc}</div>
                 </button>
               ))}
             </div>
             <button
               onClick={() => setPermPrompt(null)}
-              className="w-full mt-3 py-1.5 text-xs text-slate-400 hover:text-slate-200 transition-colors"
+              className="w-full mt-3 py-1.5 text-xs text-text-muted hover:text-text transition-colors"
             >
               Cancel
             </button>
@@ -187,13 +187,13 @@ export default function SessionManager({ socket }: SessionManagerProps) {
 
       <button
         onClick={handleCreate}
-        className="w-full mb-4 py-2.5 bg-blue-600 hover:bg-blue-500 rounded-lg text-sm font-medium transition-colors"
+        className="w-full mb-4 py-2.5 bg-accent hover:bg-accent-hover text-white rounded-xl text-sm font-medium transition-colors"
       >
         + New Session
       </button>
 
       {agentSessions.length === 0 ? (
-        <div className="text-slate-400 text-center py-8">
+        <div className="text-text-muted text-center py-8 text-sm">
           No active sessions. Create one to get started.
         </div>
       ) : (
@@ -201,7 +201,7 @@ export default function SessionManager({ socket }: SessionManagerProps) {
           {agentSessions.map((session) => (
             <div
               key={session.id}
-              className="rounded-xl border bg-slate-800 border-slate-700 p-4"
+              className="rounded-2xl border border-border bg-surface-raised p-4"
             >
               <div className="flex items-center justify-between mb-2">
                 <div className="flex items-center gap-2">
@@ -217,40 +217,40 @@ export default function SessionManager({ socket }: SessionManagerProps) {
                         value={newName}
                         onChange={(e) => setNewName(e.target.value)}
                         autoFocus
-                        className="px-2 py-0.5 bg-slate-700 border border-slate-600 rounded text-sm w-36"
+                        className="px-2 py-0.5 bg-surface-deep border border-border-subtle rounded text-sm text-text w-36 focus:outline-none focus:border-accent"
                       />
                       <button
                         type="submit"
-                        className="text-xs text-blue-400 hover:text-blue-300"
+                        className="text-xs text-accent hover:text-accent-hover"
                       >
                         Save
                       </button>
                       <button
                         type="button"
                         onClick={() => setRenaming(null)}
-                        className="text-xs text-slate-400 hover:text-slate-300"
+                        className="text-xs text-text-muted hover:text-text-secondary"
                       >
                         Cancel
                       </button>
                     </form>
                   ) : (
-                    <span className="font-medium">{session.name}</span>
+                    <span className="font-medium text-sm text-text">{session.name}</span>
                   )}
                 </div>
                 <span
-                  className={`text-xs px-2 py-0.5 rounded-full ${
+                  className={`text-[10px] px-2 py-0.5 rounded-full font-medium uppercase tracking-wider ${
                     session.status === 'attached'
-                      ? 'bg-green-900/40 text-green-400'
+                      ? 'bg-green-500/15 text-green-400'
                       : session.status === 'detached'
-                      ? 'bg-yellow-900/40 text-yellow-400'
-                      : 'bg-slate-700 text-slate-400'
+                      ? 'bg-amber-500/15 text-amber-400'
+                      : 'bg-red-500/10 text-red-400'
                   }`}
                 >
                   {session.status}
                 </span>
               </div>
 
-              <div className="text-xs text-slate-400 mb-3">
+              <div className="text-xs text-text-muted mb-3">
                 Created {timeAgo(session.createdAt)}
               </div>
 
@@ -261,20 +261,20 @@ export default function SessionManager({ socket }: SessionManagerProps) {
                       setRenaming(session.id);
                       setNewName(session.name);
                     }}
-                    className="px-3 py-1.5 text-xs bg-slate-700 hover:bg-slate-600 rounded transition-colors"
+                    className="px-3 py-1.5 text-xs bg-surface-overlay hover:bg-surface-overlay/80 border border-border-subtle text-text-secondary rounded-lg transition-colors"
                   >
                     Rename
                   </button>
                 )}
                 <button
                   onClick={() => handleConnect(session)}
-                  className="px-3 py-1.5 text-xs bg-blue-600 hover:bg-blue-500 rounded transition-colors"
+                  className="px-3 py-1.5 text-xs bg-accent hover:bg-accent-hover text-white rounded-lg transition-colors"
                 >
                   Connect
                 </button>
                 <button
                   onClick={() => handleKill(session.id)}
-                  className="px-3 py-1.5 text-xs bg-red-900/60 hover:bg-red-800 text-red-300 rounded transition-colors"
+                  className="px-3 py-1.5 text-xs bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded-lg transition-colors"
                 >
                   Kill
                 </button>
@@ -287,7 +287,7 @@ export default function SessionManager({ socket }: SessionManagerProps) {
       {agentSessions.length > 0 && (
         <button
           onClick={handleKillAll}
-          className="w-full mt-4 py-2 bg-red-900/40 hover:bg-red-900/60 text-red-300 rounded-lg text-sm transition-colors"
+          className="w-full mt-4 py-2 bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded-xl text-sm transition-colors"
         >
           Kill All Sessions
         </button>

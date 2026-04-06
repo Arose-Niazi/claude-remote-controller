@@ -45,7 +45,7 @@ export default function MobileKeyboard({
   ];
 
   return (
-    <div className="flex gap-1 px-2 py-1.5 bg-slate-800 border-t border-slate-700">
+    <div className="flex gap-1 px-2 py-1.5 bg-surface border-t border-border">
       {keys.map((k) => (
         <button
           key={k.label}
@@ -57,10 +57,10 @@ export default function MobileKeyboard({
               k.action();
             }
           }}
-          className={`flex-1 py-2 text-xs font-medium rounded transition-colors select-none ${
+          className={`flex-1 py-2 text-xs font-medium rounded-lg transition-colors select-none ${
             k.toggle && k.active
-              ? 'bg-blue-600 text-white'
-              : 'bg-slate-700 hover:bg-slate-600 text-slate-300'
+              ? 'bg-claude text-white'
+              : 'bg-surface-raised hover:bg-surface-overlay text-text-secondary'
           }`}
         >
           {k.label}

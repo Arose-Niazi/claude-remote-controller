@@ -174,17 +174,17 @@ export default function FileExplorer({
   const pathParts = currentPath.split(sep).filter(Boolean);
 
   return (
-    <div className="flex flex-col h-full bg-slate-900 border-l border-slate-700">
+    <div className="flex flex-col h-full bg-surface-deep border-l border-border">
       {/* Header */}
-      <div className="flex items-center justify-between px-3 py-2 bg-slate-800 border-b border-slate-700">
-        <span className="text-xs text-slate-400 truncate flex-1">
+      <div className="flex items-center justify-between px-3 py-2 bg-surface border-b border-border">
+        <span className="text-xs text-text-muted truncate flex-1">
           {currentPath}
         </span>
         <div className="flex items-center gap-1 ml-2 flex-shrink-0">
           {onStartClaude && (
             <button
               onClick={() => onStartClaude(currentPath, hasClaudeDir)}
-              className="px-2 py-0.5 text-xs bg-purple-700 hover:bg-purple-600 text-white rounded"
+              className="px-2 py-0.5 text-xs bg-claude hover:bg-claude-hover text-white rounded-lg transition-colors"
               title="Start Claude here"
             >
               Claude
@@ -194,11 +194,11 @@ export default function FileExplorer({
             <button
               onClick={handleGitPull}
               disabled={gitPullStatus === 'pulling'}
-              className={`px-2 py-0.5 text-xs rounded ${
-                gitPullStatus === 'done' ? 'bg-green-700 text-white' :
-                gitPullStatus === 'error' ? 'bg-red-700 text-white' :
-                'bg-orange-700 hover:bg-orange-600 text-white'
-              } disabled:opacity-50`}
+              className={`px-2 py-0.5 text-xs rounded-lg transition-colors ${
+                gitPullStatus === 'done' ? 'bg-green-500/15 text-green-400' :
+                gitPullStatus === 'error' ? 'bg-red-500/10 text-red-400' :
+                'bg-accent hover:bg-accent-hover text-white'
+              } disabled:opacity-40`}
               title="Git pull"
             >
               {gitPullStatus === 'pulling' ? '...' : gitPullStatus === 'done' ? 'Pulled' : gitPullStatus === 'error' ? 'Err' : 'Pull'}
@@ -206,7 +206,7 @@ export default function FileExplorer({
           )}
           <button
             onClick={onClose}
-            className="px-2 py-0.5 text-xs bg-slate-700 hover:bg-slate-600 rounded"
+            className="px-2 py-0.5 text-xs bg-surface-raised hover:bg-surface-overlay border border-border-subtle text-text-secondary rounded-lg transition-colors"
           >
             x
           </button>
@@ -215,20 +215,20 @@ export default function FileExplorer({
 
       {/* Git pull feedback */}
       {gitPullMsg && (
-        <div className={`px-3 py-1.5 text-xs border-b border-slate-700 ${
-          gitPullStatus === 'error' ? 'bg-red-900/30 text-red-300' : 'bg-green-900/30 text-green-300'
+        <div className={`px-3 py-1.5 text-xs border-b border-border ${
+          gitPullStatus === 'error' ? 'bg-red-500/10 text-red-400' : 'bg-green-500/15 text-green-400'
         }`}>
           <pre className="whitespace-pre-wrap font-mono">{gitPullMsg}</pre>
         </div>
       )}
 
       {/* Breadcrumb */}
-      <div className="flex items-center gap-0.5 px-3 py-1.5 text-xs text-slate-400 overflow-x-auto border-b border-slate-800 flex-shrink-0">
+      <div className="flex items-center gap-0.5 px-3 py-1.5 text-xs text-text-muted overflow-x-auto border-b border-border-subtle flex-shrink-0">
         <button
           onClick={() =>
             setCurrentPath(currentPath.startsWith('/') ? '/' : pathParts[0] + '\\')
           }
-          className="hover:text-slate-200"
+          className="hover:text-text"
         >
           {currentPath.startsWith('/') ? '/' : pathParts[0] + '\\'}
         </button>
@@ -241,11 +241,11 @@ export default function FileExplorer({
             : targetParts.join('\\') + '\\';
           return (
             <span key={i} className="flex items-center gap-0.5">
-              <span className="text-slate-600">{sep}</span>
+              <span className="text-text-muted/50">{sep}</span>
               <button
                 onClick={() => setCurrentPath(target)}
-                className={`hover:text-slate-200 ${
-                  i === arr.length - 1 ? 'text-slate-200' : ''
+                className={`hover:text-text ${
+                  i === arr.length - 1 ? 'text-text' : ''
                 }`}
               >
                 {part}
@@ -260,14 +260,14 @@ export default function FileExplorer({
         {/* Parent directory */}
         <button
           onClick={navigateUp}
-          className="w-full flex items-center gap-2 px-3 py-2 text-sm text-slate-400 hover:bg-slate-800 border-b border-slate-800/50"
+          className="w-full flex items-center gap-2 px-3 py-2 text-sm text-text-muted hover:bg-surface-raised/50 border-b border-border-subtle/50 transition-colors"
         >
           <span className="text-base">&#8592;</span>
           <span>..</span>
         </button>
 
         {loading && (
-          <div className="text-center text-slate-500 text-sm py-8">Loading...</div>
+          <div className="text-center text-text-muted text-sm py-8">Loading...</div>
         )}
 
         {error && (
@@ -278,7 +278,7 @@ export default function FileExplorer({
           entries.map((entry) => (
             <div
               key={entry.name}
-              className="flex items-center gap-2 px-3 py-1.5 hover:bg-slate-800/70 border-b border-slate-800/30 group"
+              className="flex items-center gap-2 px-3 py-1.5 hover:bg-surface-raised/50 border-b border-border-subtle/30 group transition-colors"
             >
               {entry.isDirectory ? (
                 <>
@@ -286,14 +286,14 @@ export default function FileExplorer({
                     onClick={() => navigateTo(entry.name)}
                     className="flex-1 flex items-center gap-2 text-sm text-left min-w-0"
                   >
-                    <span className="text-yellow-400 flex-shrink-0">&#128193;</span>
-                    <span className="truncate text-slate-200">
+                    <span className="text-amber-400 flex-shrink-0">&#128193;</span>
+                    <span className="truncate text-text">
                       {copiedName === entry.name ? 'Copied!' : entry.name}
                     </span>
                   </button>
                   <button
                     onClick={(e) => { e.stopPropagation(); copyPath(entry.name); }}
-                    className="text-xs px-1.5 py-0.5 bg-slate-700 hover:bg-blue-600 rounded opacity-60 group-hover:opacity-100 transition-opacity flex-shrink-0"
+                    className="text-xs px-1.5 py-0.5 bg-surface-overlay hover:bg-accent rounded-lg opacity-60 group-hover:opacity-100 transition-all flex-shrink-0"
                     title="Copy path"
                   >
                     &#128203;
@@ -305,21 +305,21 @@ export default function FileExplorer({
                   className="flex-1 flex items-center gap-2 text-sm text-left min-w-0"
                   title="Tap to copy path"
                 >
-                  <span className="text-slate-500 flex-shrink-0">&#128196;</span>
-                  <span className="truncate text-slate-300">
+                  <span className="text-text-muted flex-shrink-0">&#128196;</span>
+                  <span className="truncate text-text-secondary">
                     {copiedName === entry.name ? 'Copied!' : entry.name}
                   </span>
                 </button>
               )}
 
-              <span className="text-xs text-slate-500 flex-shrink-0 w-16 text-right">
+              <span className="text-xs text-text-muted flex-shrink-0 w-16 text-right">
                 {formatSize(entry.size)}
               </span>
 
               {!entry.isDirectory && (
                 <button
                   onClick={() => downloadFile(entry.name)}
-                  className="text-xs px-1.5 py-0.5 bg-slate-700 hover:bg-blue-600 rounded opacity-60 group-hover:opacity-100 transition-opacity flex-shrink-0"
+                  className="text-xs px-1.5 py-0.5 bg-surface-overlay hover:bg-accent rounded-lg opacity-60 group-hover:opacity-100 transition-all flex-shrink-0"
                   title="Download to phone"
                 >
                   &#8595;

@@ -26,24 +26,24 @@ export default function FileNotifications({ downloads, onDismiss }: FileNotifica
       {downloads.map((dl) => (
         <div
           key={dl.id}
-          className="bg-slate-800 border border-slate-600 rounded-lg p-3 shadow-xl"
+          className="bg-surface-raised border border-border rounded-2xl p-3 shadow-xl"
         >
           <div className="flex items-center justify-between gap-2 mb-2">
-            <span className="text-sm text-slate-200 truncate">{dl.fileName}</span>
+            <span className="text-sm text-text truncate">{dl.fileName}</span>
             <button
               onClick={() => onDismiss(dl.id)}
-              className="text-xs text-slate-500 hover:text-slate-300"
+              className="text-xs text-text-muted hover:text-text-secondary transition-colors"
             >
               x
             </button>
           </div>
           <div className="flex items-center justify-between">
-            <span className="text-xs text-slate-400">{formatSize(dl.size)}</span>
+            <span className="text-xs text-text-muted">{formatSize(dl.size)}</span>
             <a
               href={dl.downloadUrl}
               download={dl.fileName}
               onClick={() => setTimeout(() => onDismiss(dl.id), 500)}
-              className="px-3 py-1 text-xs bg-blue-600 hover:bg-blue-500 rounded font-medium"
+              className="px-3 py-1 text-xs bg-accent hover:bg-accent-hover text-white rounded-lg font-medium transition-colors"
             >
               Save
             </a>

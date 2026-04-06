@@ -93,26 +93,26 @@ export default function TerminalView({ socket }: TerminalViewProps) {
       fontSize: isMobile ? 11 : 14,
       fontFamily: 'Menlo, Monaco, "Cascadia Code", monospace',
       theme: {
-        background: '#0f172a',
-        foreground: '#e2e8f0',
-        cursor: '#e2e8f0',
-        selectionBackground: '#334155',
-        black: '#1e293b',
-        red: '#ef4444',
-        green: '#22c55e',
-        yellow: '#eab308',
-        blue: '#3b82f6',
-        magenta: '#a855f7',
-        cyan: '#06b6d4',
-        white: '#e2e8f0',
-        brightBlack: '#475569',
-        brightRed: '#f87171',
-        brightGreen: '#4ade80',
-        brightYellow: '#facc15',
-        brightBlue: '#60a5fa',
-        brightMagenta: '#c084fc',
-        brightCyan: '#22d3ee',
-        brightWhite: '#f8fafc',
+        background: '#1a1a1e',
+        foreground: '#e8e4e0',
+        cursor: '#d4714e',
+        selectionBackground: '#3a3a42',
+        black: '#232328',
+        red: '#d9534f',
+        green: '#5cb85c',
+        yellow: '#d4a04e',
+        blue: '#5b9bd5',
+        magenta: '#9b7ddb',
+        cyan: '#5bc0de',
+        white: '#e8e4e0',
+        brightBlack: '#4a4a52',
+        brightRed: '#e06b67',
+        brightGreen: '#72c872',
+        brightYellow: '#e0b464',
+        brightBlue: '#74b0e0',
+        brightMagenta: '#af92e3',
+        brightCyan: '#74d0e8',
+        brightWhite: '#f2eeea',
       },
     });
 
@@ -276,28 +276,28 @@ export default function TerminalView({ socket }: TerminalViewProps) {
         onChange={handleUpload}
       />
 
-      {/* Toolbar — single line, scrollable on small screens */}
-      <div className="flex items-center gap-2 px-2 py-1.5 bg-slate-800 border-b border-slate-700 overflow-x-auto flex-shrink-0">
+      {/* Toolbar -- single line, scrollable on small screens */}
+      <div className="flex items-center gap-2 px-2 py-1.5 bg-surface border-b border-border overflow-x-auto flex-shrink-0">
         <button
           onClick={handleDetach}
-          className="px-2 py-1 text-xs bg-slate-700 hover:bg-slate-600 rounded transition-colors whitespace-nowrap flex-shrink-0"
+          className="px-2 py-1 text-xs bg-surface-raised hover:bg-surface-overlay border border-border-subtle text-text-secondary rounded-lg transition-colors whitespace-nowrap flex-shrink-0"
         >
           ←
         </button>
-        <span className="text-xs text-slate-400 truncate min-w-0">{agentId}</span>
+        <span className="text-xs text-text-muted truncate min-w-0">{agentId}</span>
         <div className="flex gap-1 ml-auto flex-shrink-0">
           <button
             onClick={handleCopy}
-            className="px-2 py-1 text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 rounded transition-colors whitespace-nowrap"
+            className="px-2 py-1 text-xs bg-surface-raised hover:bg-surface-overlay border border-border-subtle text-text-secondary rounded-lg transition-colors whitespace-nowrap"
           >
             {copyLabel}
           </button>
           <button
             onClick={() => setShowFiles((p) => !p)}
-            className={`px-2 py-1 text-xs rounded transition-colors whitespace-nowrap ${
+            className={`px-2 py-1 text-xs rounded-lg transition-colors whitespace-nowrap ${
               showFiles
-                ? 'bg-blue-600 text-white'
-                : 'bg-slate-700 hover:bg-slate-600 text-slate-300'
+                ? 'bg-claude text-white'
+                : 'bg-surface-raised hover:bg-surface-overlay border border-border-subtle text-text-secondary'
             }`}
           >
             Files
@@ -305,13 +305,13 @@ export default function TerminalView({ socket }: TerminalViewProps) {
           <button
             onClick={() => fileInputRef.current?.click()}
             disabled={uploading}
-            className="px-2 py-1 text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 rounded transition-colors disabled:opacity-50 whitespace-nowrap"
+            className="px-2 py-1 text-xs bg-surface-raised hover:bg-surface-overlay border border-border-subtle text-text-secondary rounded-lg transition-colors disabled:opacity-40 whitespace-nowrap"
           >
             {uploading ? '...' : 'Up'}
           </button>
           <button
             onClick={handleKill}
-            className="px-2 py-1 text-xs bg-red-900/60 hover:bg-red-800 text-red-300 rounded transition-colors whitespace-nowrap"
+            className="px-2 py-1 text-xs bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded-lg transition-colors whitespace-nowrap"
           >
             Kill
           </button>
