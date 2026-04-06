@@ -45,42 +45,30 @@ export default function TerminalView({ socket }: TerminalViewProps) {
   const ctrlRef = useRef(false);
   const altRef = useRef(false);
 
-  // Chat message tracking
+  // Chat message tracking — streaming appends to last received message
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
-  const outputBufferRef = useRef('');
-  const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const updateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const flushOutputBuffer = useCallback(() => {
-    const text = outputBufferRef.current;
-    if (text.trim()) {
-      setChatMessages((prev) => [
-        ...prev,
-        { id: ++msgCounter, type: 'received', text, timestamp: Date.now() },
-      ]);
-    }
-    outputBufferRef.current = '';
+  const appendOutput = useCallback((data: string) => {
+    setChatMessages((prev) => {
+      const last = prev[prev.length - 1];
+      if (last && last.type === 'received') {
+        // Append to existing received message
+        const updated = [...prev];
+        updated[updated.length - 1] = { ...last, text: last.text + data };
+        return updated;
+      }
+      // Create new received message
+      return [...prev, { id: ++msgCounter, type: 'received', text: data, timestamp: Date.now() }];
+    });
+    // Throttle re-renders: batch rapid updates
+    if (updateTimerRef.current) clearTimeout(updateTimerRef.current);
+    updateTimerRef.current = setTimeout(() => {
+      setChatMessages((prev) => [...prev]); // force re-render
+    }, 150);
   }, []);
 
-  const appendOutput = useCallback(
-    (data: string) => {
-      outputBufferRef.current += data;
-      // Debounce: flush after 400ms of no new data
-      if (flushTimerRef.current) clearTimeout(flushTimerRef.current);
-      flushTimerRef.current = setTimeout(flushOutputBuffer, 400);
-    },
-    [flushOutputBuffer]
-  );
-
   const addSentMessage = useCallback((text: string) => {
-    // Flush any pending output before adding sent message
-    if (outputBufferRef.current.trim()) {
-      setChatMessages((prev) => [
-        ...prev,
-        { id: ++msgCounter, type: 'received', text: outputBufferRef.current, timestamp: Date.now() },
-      ]);
-      outputBufferRef.current = '';
-    }
-    if (flushTimerRef.current) clearTimeout(flushTimerRef.current);
     setChatMessages((prev) => [
       ...prev,
       { id: ++msgCounter, type: 'sent', text, timestamp: Date.now() },
