@@ -1,54 +1,39 @@
-import { useState, useCallback } from 'react';
-
 interface MobileKeyboardProps {
   onKey: (data: string) => void;
+  ctrlActive: boolean;
+  altActive: boolean;
+  onToggleCtrl: () => void;
+  onToggleAlt: () => void;
 }
 
-export default function MobileKeyboard({ onKey }: MobileKeyboardProps) {
-  const [ctrlActive, setCtrlActive] = useState(false);
-  const [altActive, setAltActive] = useState(false);
-
-  const sendKey = useCallback(
-    (key: string) => {
-      let data = key;
-      if (ctrlActive) {
-        if (key.length === 1 && key >= 'a' && key <= 'z') {
-          data = String.fromCharCode(key.charCodeAt(0) - 96);
-        } else if (key.length === 1 && key >= 'A' && key <= 'Z') {
-          data = String.fromCharCode(key.charCodeAt(0) - 64);
-        }
-        setCtrlActive(false);
-      }
-      if (altActive) {
-        data = '\x1b' + data;
-        setAltActive(false);
-      }
-      onKey(data);
-    },
-    [ctrlActive, altActive, onKey]
-  );
-
+export default function MobileKeyboard({
+  onKey,
+  ctrlActive,
+  altActive,
+  onToggleCtrl,
+  onToggleAlt,
+}: MobileKeyboardProps) {
   const keys = [
-    { label: 'ESC', action: () => sendKey('\x1b') },
-    { label: 'TAB', action: () => sendKey('\t') },
+    { label: 'ESC', action: () => onKey('\x1b') },
+    { label: 'TAB', action: () => onKey('\t') },
     {
       label: 'CTRL',
-      action: () => setCtrlActive((p) => !p),
+      action: onToggleCtrl,
       active: ctrlActive,
       toggle: true,
     },
     {
       label: 'ALT',
-      action: () => setAltActive((p) => !p),
+      action: onToggleAlt,
       active: altActive,
       toggle: true,
     },
     { label: 'C-c', action: () => onKey('\x03') },
     { label: 'C-z', action: () => onKey('\x1a') },
-    { label: '\u2191', action: () => sendKey('\x1b[A') },
-    { label: '\u2193', action: () => sendKey('\x1b[B') },
-    { label: '\u2190', action: () => sendKey('\x1b[D') },
-    { label: '\u2192', action: () => sendKey('\x1b[C') },
+    { label: '\u2191', action: () => onKey('\x1b[A') },
+    { label: '\u2193', action: () => onKey('\x1b[B') },
+    { label: '\u2190', action: () => onKey('\x1b[D') },
+    { label: '\u2192', action: () => onKey('\x1b[C') },
   ];
 
   return (

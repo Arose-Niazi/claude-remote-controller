@@ -32,6 +32,10 @@ export default function TerminalView({ socket }: TerminalViewProps) {
   const [uploading, setUploading] = useState(false);
   const [copyLabel, setCopyLabel] = useState('Copy');
   const [showFiles, setShowFiles] = useState(false);
+  const [ctrlActive, setCtrlActive] = useState(false);
+  const [altActive, setAltActive] = useState(false);
+  const ctrlRef = useRef(false);
+  const altRef = useRef(false);
   const [downloads, setDownloads] = useState<
     { id: number; fileName: string; downloadUrl: string; size: number }[]
   >([]);
@@ -67,6 +71,13 @@ export default function TerminalView({ socket }: TerminalViewProps) {
       setTimeout(() => navigate(`/sessions/${agentId}`), 1500);
     },
   });
+
+  // Keep refs in sync (onData callback captures stale closures)
+  useEffect(() => { ctrlRef.current = ctrlActive; }, [ctrlActive]);
+  useEffect(() => { altRef.current = altActive; }, [altActive]);
+
+  const toggleCtrl = useCallback(() => setCtrlActive((p) => !p), []);
+  const toggleAlt = useCallback(() => setAltActive((p) => !p), []);
 
   // Initialize xterm.js
   useEffect(() => {
@@ -118,7 +129,21 @@ export default function TerminalView({ socket }: TerminalViewProps) {
     termRef.current = term;
     fitAddonRef.current = fitAddon;
 
-    term.onData((data) => write(data));
+    term.onData((data) => {
+      let out = data;
+      if (ctrlRef.current && out.length === 1) {
+        const code = out.toLowerCase().charCodeAt(0);
+        if (code >= 97 && code <= 122) {
+          out = String.fromCharCode(code - 96);
+          setCtrlActive(false);
+        }
+      }
+      if (altRef.current) {
+        out = '\x1b' + out;
+        setAltActive(false);
+      }
+      write(out);
+    });
 
     if (isNewSession) {
       create(term.cols, term.rows);
@@ -281,7 +306,7 @@ export default function TerminalView({ socket }: TerminalViewProps) {
 
       {/* Main area: terminal (always full width) */}
       <div className="flex-1 overflow-hidden relative">
-        <div ref={termContainerRef} className="absolute inset-0" />
+        <div ref={termContainerRef} className="absolute inset-0 pl-2" />
 
         {/* File explorer: full-screen overlay on mobile, side panel on desktop */}
         {showFiles && (
@@ -301,7 +326,13 @@ export default function TerminalView({ socket }: TerminalViewProps) {
       <FileNotifications downloads={downloads} onDismiss={dismissDownload} />
 
       {/* Mobile extra keys */}
-      <MobileKeyboard onKey={handleMobileKey} />
+      <MobileKeyboard
+        onKey={handleMobileKey}
+        ctrlActive={ctrlActive}
+        altActive={altActive}
+        onToggleCtrl={toggleCtrl}
+        onToggleAlt={toggleAlt}
+      />
     </div>
   );
 }
