@@ -5,13 +5,15 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebglAddon } from '@xterm/addon-webgl';
 import '@xterm/xterm/css/xterm.css';
-import { TERMINAL_OUTPUT } from '@crc/shared';
+import { TERMINAL_OUTPUT, CLAUDE_CONV_READ, CLAUDE_CONV_DATA } from '@crc/shared';
+import type { ClaudeConvMessage, ClaudeConvDataPayload } from '@crc/shared';
 import { useTerminal } from '../hooks/useTerminal';
 import { useAuthStore } from '../stores/authStore';
 import { useAgentStore } from '../stores/agentStore';
 import MobileKeyboard from './MobileKeyboard';
 import FileExplorer from './FileExplorer';
 import FileNotifications from './FileNotifications';
+import ChatView from './ChatView';
 
 interface TerminalViewProps {
   socket: Socket | null;
@@ -39,8 +41,13 @@ export default function TerminalView({ socket }: TerminalViewProps) {
   const [ctrlActive, setCtrlActive] = useState(false);
   const [altActive, setAltActive] = useState(false);
   const [composeText, setComposeText] = useState('');
-  const [sentToast, setSentToast] = useState('');
+  const [pendingSent, setPendingSent] = useState<string[]>([]);
   const composeRef = useRef<HTMLTextAreaElement>(null);
+
+  // Conversation polling from JSONL
+  const [convMessages, setConvMessages] = useState<ClaudeConvMessage[]>([]);
+  const convLineRef = useRef(0);
+  const convProjectRef = useRef<string | null>(null);
   const ctrlRef = useRef(false);
   const altRef = useRef(false);
   const [downloads, setDownloads] = useState<
@@ -194,6 +201,53 @@ export default function TerminalView({ socket }: TerminalViewProps) {
     }, 50);
   }, [rawMode, resize]);
 
+  // Detect project path from initial command (cd "/path" && claude)
+  useEffect(() => {
+    if (!initialCmd) return;
+    const match = initialCmd.match(/cd\s+"?([^"&]+)"?\s*&&/);
+    if (match) convProjectRef.current = match[1];
+  }, [initialCmd]);
+
+  // Poll JSONL conversation file every 2 seconds
+  useEffect(() => {
+    if (!socket || !agentId || rawMode) return;
+    const projectPath = convProjectRef.current;
+    if (!projectPath) return;
+
+    const handleConvData = (payload: ClaudeConvDataPayload) => {
+      if (payload.agentId !== agentId) return;
+      if (payload.messages.length > 0) {
+        setConvMessages((prev) => [...prev, ...payload.messages]);
+        // Remove pending sent messages that now appear in JSONL
+        setPendingSent((prev) => {
+          const newUserMsgs = payload.messages.filter((m) => m.type === 'user');
+          if (newUserMsgs.length > 0) return prev.slice(newUserMsgs.length);
+          return prev;
+        });
+      }
+      convLineRef.current = payload.totalLines;
+    };
+
+    socket.on(CLAUDE_CONV_DATA, handleConvData);
+
+    // Initial read
+    socket.emit(CLAUDE_CONV_READ, { agentId, projectPath, afterLine: 0 });
+
+    // Poll every 2 seconds
+    const interval = setInterval(() => {
+      socket.emit(CLAUDE_CONV_READ, {
+        agentId,
+        projectPath,
+        afterLine: convLineRef.current,
+      });
+    }, 2000);
+
+    return () => {
+      socket.off(CLAUDE_CONV_DATA, handleConvData);
+      clearInterval(interval);
+    };
+  }, [socket, agentId, rawMode]);
+
   // Wire up terminal output
   useEffect(() => {
     if (!socket || !termRef.current) return;
@@ -290,27 +344,25 @@ export default function TerminalView({ socket }: TerminalViewProps) {
     setDownloads((prev) => prev.filter((d) => d.id !== id));
   }, []);
 
-  const showSentToast = useCallback((text: string) => {
-    const preview = text.length > 60 ? text.slice(0, 60) + '...' : text;
-    setSentToast(preview);
-    setTimeout(() => setSentToast(''), 2000);
-  }, []);
-
   const handleComposeSend = useCallback(() => {
     if (!composeText) return;
-    showSentToast(composeText);
+    if (convProjectRef.current) {
+      setPendingSent((prev) => [...prev, composeText]);
+    }
     write(composeText + '\r');
     setComposeText('');
     composeRef.current?.focus();
-  }, [composeText, write, showSentToast]);
+  }, [composeText, write]);
 
   const handleComposeRaw = useCallback(() => {
     if (!composeText) return;
-    showSentToast(composeText);
+    if (convProjectRef.current) {
+      setPendingSent((prev) => [...prev, composeText]);
+    }
     write(composeText);
     setComposeText('');
     composeRef.current?.focus();
-  }, [composeText, write, showSentToast]);
+  }, [composeText, write]);
 
   return (
     <div className="flex flex-col h-[calc(100vh-52px)]">
@@ -374,23 +426,27 @@ export default function TerminalView({ socket }: TerminalViewProps) {
         </div>
       </div>
 
-      {/* Terminal output — always visible, xterm handles all rendering */}
+      {/* Main content area */}
       <div className="flex-1 overflow-hidden relative">
-        <div ref={termContainerRef} className="absolute inset-0 pl-1" />
+        {/* xterm.js terminal — visible in TTY mode or when no conversation */}
+        <div
+          ref={termContainerRef}
+          className={`absolute inset-0 pl-1 ${!rawMode && convProjectRef.current ? 'invisible' : ''}`}
+        />
 
-        {/* Touch blocker in compose mode — tapping terminal focuses compose input */}
-        {!rawMode && (
+        {/* Chat view — visible in compose mode when we have a conversation */}
+        {!rawMode && convProjectRef.current && (
+          <div className="absolute inset-0 flex flex-col bg-surface-deep z-[3]">
+            <ChatView messages={convMessages} pendingSent={pendingSent} />
+          </div>
+        )}
+
+        {/* Touch blocker when showing terminal in compose mode (no conversation) */}
+        {!rawMode && !convProjectRef.current && (
           <div
             className="absolute inset-0 z-[5]"
             onClick={() => composeRef.current?.focus()}
           />
-        )}
-
-        {/* Sent command toast */}
-        {sentToast && !rawMode && (
-          <div className="absolute bottom-2 right-2 z-[6] bg-accent/90 text-white text-xs px-3 py-1.5 rounded-xl shadow-lg max-w-[70%] truncate backdrop-blur-sm">
-            {sentToast}
-          </div>
         )}
 
         {/* File explorer overlay */}

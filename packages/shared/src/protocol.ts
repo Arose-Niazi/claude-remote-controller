@@ -60,6 +60,12 @@ export const AGENT_EXEC = 'agent:exec' as const;
 // Agent -> Server -> Client
 export const AGENT_EXEC_RESULT = 'agent:exec:result' as const;
 
+// --- Claude Conversation (live JSONL reading) ---
+// Client -> Server -> Agent
+export const CLAUDE_CONV_READ = 'claude:conv:read' as const;
+// Agent -> Server -> Client
+export const CLAUDE_CONV_DATA = 'claude:conv:data' as const;
+
 // --- Claude Sessions Events ---
 // Client -> Server
 export const CLAUDE_SESSIONS_LIST = 'claude:sessions:list' as const;
@@ -190,6 +196,32 @@ export interface AgentExecResultPayload {
   requestId: string;
   stdout: string;
   stderr: string;
+  error?: string;
+}
+
+// --- Claude Conversation Payloads ---
+
+export interface ClaudeConvMessage {
+  type: 'user' | 'assistant' | 'tool_use' | 'tool_result';
+  content: string;
+  toolName?: string;
+  toolId?: string;
+  timestamp?: string;
+  model?: string;
+}
+
+export interface ClaudeConvReadPayload {
+  agentId?: string;
+  projectPath: string;
+  sessionId?: string;
+  afterLine?: number;
+}
+
+export interface ClaudeConvDataPayload {
+  agentId?: string;
+  sessionId: string;
+  messages: ClaudeConvMessage[];
+  totalLines: number;
   error?: string;
 }
 

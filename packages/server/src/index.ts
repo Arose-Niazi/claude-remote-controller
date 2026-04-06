@@ -51,6 +51,8 @@ import {
   VPN_UPDATE,
   CLAUDE_SESSIONS_LIST,
   CLAUDE_SESSIONS_RESULT,
+  CLAUDE_CONV_READ,
+  CLAUDE_CONV_DATA,
   AGENT_EXEC,
   AGENT_EXEC_RESULT,
   type FilesListPayload,
@@ -63,6 +65,8 @@ import {
   type VpnUpdatePayload,
   type ClaudeSessionsListPayload,
   type ClaudeSessionsResultPayload,
+  type ClaudeConvReadPayload,
+  type ClaudeConvDataPayload,
   type AgentExecPayload,
   type AgentExecResultPayload,
 } from '@crc/shared';
@@ -222,6 +226,11 @@ agentNs.on('connection', (socket) => {
     clientNs.emit(CLAUDE_SESSIONS_RESULT, { ...payload, agentId });
   });
 
+  // --- Claude conversation relay (agent -> client) ---
+  socket.on(CLAUDE_CONV_DATA, (payload: ClaudeConvDataPayload) => {
+    clientNs.emit(CLAUDE_CONV_DATA, { ...payload, agentId });
+  });
+
   // --- Agent exec relay (agent -> client) ---
   socket.on(AGENT_EXEC_RESULT, (payload: AgentExecResultPayload) => {
     clientNs.emit(AGENT_EXEC_RESULT, payload);
@@ -372,6 +381,14 @@ clientNs.on('connection', (socket) => {
     if (!agentId) return;
     const agentSocketId = getAgentSocketId(agentId);
     if (agentSocketId) agentNs.to(agentSocketId).emit(VPN_DISCONNECT, { profileId });
+  });
+
+  // --- Claude conversation relay (client -> agent) ---
+  socket.on(CLAUDE_CONV_READ, (payload: ClaudeConvReadPayload) => {
+    const { agentId, ...rest } = payload;
+    if (!agentId) return;
+    const agentSocketId = getAgentSocketId(agentId);
+    if (agentSocketId) agentNs.to(agentSocketId).emit(CLAUDE_CONV_READ, rest);
   });
 
   // --- Claude sessions relay (client -> agent) ---

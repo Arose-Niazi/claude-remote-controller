@@ -22,6 +22,8 @@ import {
   VPN_UPDATE,
   CLAUDE_SESSIONS_LIST,
   CLAUDE_SESSIONS_RESULT,
+  CLAUDE_CONV_READ,
+  CLAUDE_CONV_DATA,
   AGENT_EXEC,
   AGENT_EXEC_RESULT,
   HEARTBEAT_INTERVAL,
@@ -36,6 +38,7 @@ import {
   type VpnConnectPayload,
   type VpnDisconnectPayload,
   type ClaudeSessionsListPayload,
+  type ClaudeConvReadPayload,
   type AgentExecPayload,
 } from '@crc/shared';
 
@@ -45,6 +48,7 @@ import { buildHeartbeat } from './heartbeat.js';
 import { listDirectory, downloadFile } from './file-explorer.js';
 import { getProfiles, connectVpn, disconnectVpn } from './vpn-manager.js';
 import { listClaudeSessions } from './claude-sessions.js';
+import { readConversation } from './claude-conversation.js';
 import {
   createTerminalSession,
   writeToSession,
@@ -205,6 +209,25 @@ socket.on(AGENT_EXEC, async (payload: AgentExecPayload) => {
       stdout: err.stdout || '',
       stderr: err.stderr || '',
       error: err.message,
+    });
+  }
+});
+
+// --- Claude Conversation handler ---
+socket.on(CLAUDE_CONV_READ, async (payload: ClaudeConvReadPayload) => {
+  const result = await readConversation(payload.projectPath, payload.afterLine || 0, payload.sessionId);
+  if (result) {
+    socket.emit(CLAUDE_CONV_DATA, {
+      sessionId: result.sessionId,
+      messages: result.messages,
+      totalLines: result.totalLines,
+    });
+  } else {
+    socket.emit(CLAUDE_CONV_DATA, {
+      sessionId: '',
+      messages: [],
+      totalLines: 0,
+      error: 'No conversation found',
     });
   }
 });
