@@ -12,12 +12,14 @@ import { useAgentStore } from '../stores/agentStore';
 import MobileKeyboard from './MobileKeyboard';
 import FileExplorer from './FileExplorer';
 import FileNotifications from './FileNotifications';
+import ChatView, { type ChatMessage } from './ChatView';
 
 interface TerminalViewProps {
   socket: Socket | null;
 }
 
 let downloadCounter = 0;
+let msgCounter = 0;
 
 export default function TerminalView({ socket }: TerminalViewProps) {
   const { agentId, sessionId: paramSessionId } = useParams<{
@@ -42,6 +44,49 @@ export default function TerminalView({ socket }: TerminalViewProps) {
   const composeRef = useRef<HTMLTextAreaElement>(null);
   const ctrlRef = useRef(false);
   const altRef = useRef(false);
+
+  // Chat message tracking
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const outputBufferRef = useRef('');
+  const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const flushOutputBuffer = useCallback(() => {
+    const text = outputBufferRef.current;
+    if (text.trim()) {
+      setChatMessages((prev) => [
+        ...prev,
+        { id: ++msgCounter, type: 'received', text, timestamp: Date.now() },
+      ]);
+    }
+    outputBufferRef.current = '';
+  }, []);
+
+  const appendOutput = useCallback(
+    (data: string) => {
+      outputBufferRef.current += data;
+      // Debounce: flush after 400ms of no new data
+      if (flushTimerRef.current) clearTimeout(flushTimerRef.current);
+      flushTimerRef.current = setTimeout(flushOutputBuffer, 400);
+    },
+    [flushOutputBuffer]
+  );
+
+  const addSentMessage = useCallback((text: string) => {
+    // Flush any pending output before adding sent message
+    if (outputBufferRef.current.trim()) {
+      setChatMessages((prev) => [
+        ...prev,
+        { id: ++msgCounter, type: 'received', text: outputBufferRef.current, timestamp: Date.now() },
+      ]);
+      outputBufferRef.current = '';
+    }
+    if (flushTimerRef.current) clearTimeout(flushTimerRef.current);
+    setChatMessages((prev) => [
+      ...prev,
+      { id: ++msgCounter, type: 'sent', text, timestamp: Date.now() },
+    ]);
+  }, []);
+
   const [downloads, setDownloads] = useState<
     { id: number; fileName: string; downloadUrl: string; size: number }[]
   >([]);
@@ -66,9 +111,11 @@ export default function TerminalView({ socket }: TerminalViewProps) {
     existingSessionId: isNewSession ? undefined : paramSessionId,
     onExit: () => {
       termRef.current?.write('\r\n\x1b[33m[Session ended]\x1b[0m\r\n');
+      appendOutput('\x1b[33m[Session ended]\x1b[0m');
     },
     onBuffer: (data) => {
       termRef.current?.write(data);
+      appendOutput(data);
     },
     onDetached: (reason) => {
       termRef.current?.write(`\r\n\x1b[33m[Detached: ${reason}]\x1b[0m\r\n`);
@@ -76,7 +123,7 @@ export default function TerminalView({ socket }: TerminalViewProps) {
     },
   });
 
-  // Keep refs in sync (onData callback captures stale closures)
+  // Keep refs in sync
   useEffect(() => { ctrlRef.current = ctrlActive; }, [ctrlActive]);
   useEffect(() => { altRef.current = altActive; }, [altActive]);
 
@@ -180,18 +227,18 @@ export default function TerminalView({ socket }: TerminalViewProps) {
       term.focus();
     } else {
       term.options.disableStdin = true;
-      // Blur terminal so mobile keyboard hides
       (term as any).textarea?.blur();
     }
   }, [rawMode]);
 
-  // Wire up terminal output
+  // Wire up terminal output — feeds both xterm AND chat view
   useEffect(() => {
     if (!socket || !termRef.current) return;
 
     const handleOutput = (payload: { sessionId: string; data: string }) => {
       if (payload.sessionId === sessionId) {
         termRef.current?.write(payload.data);
+        appendOutput(payload.data);
       }
     };
 
@@ -199,17 +246,18 @@ export default function TerminalView({ socket }: TerminalViewProps) {
     return () => {
       socket.off(TERMINAL_OUTPUT, handleOutput);
     };
-  }, [socket, sessionId]);
+  }, [socket, sessionId, appendOutput]);
 
-  // Auto-write initial command from ?cmd= param (e.g., Claude resume)
+  // Auto-write initial command from ?cmd= param
   useEffect(() => {
     if (!initialCmd || !sessionId || cmdSentRef.current) return;
     cmdSentRef.current = true;
     const timer = setTimeout(() => {
       write(initialCmd + '\r');
+      addSentMessage(initialCmd);
     }, 500);
     return () => clearTimeout(timer);
-  }, [initialCmd, sessionId, write]);
+  }, [initialCmd, sessionId, write, addSentMessage]);
 
   const handleDetach = useCallback(() => {
     detach();
@@ -256,8 +304,9 @@ export default function TerminalView({ socket }: TerminalViewProps) {
       const result = await res.json();
       if (result.downloadUrl) {
         const origin = window.location.origin;
-        const cmd = `curl -o "${result.fileName}" "${origin}${result.downloadUrl}"\n`;
-        write(cmd);
+        const cmd = `curl -o "${result.fileName}" "${origin}${result.downloadUrl}"`;
+        write(cmd + '\r');
+        addSentMessage(cmd);
       }
     } catch {
       termRef.current?.write('\r\n\x1b[31m[Upload failed]\x1b[0m\r\n');
@@ -265,7 +314,7 @@ export default function TerminalView({ socket }: TerminalViewProps) {
       setUploading(false);
       input.value = '';
     }
-  }, [token, write]);
+  }, [token, write, addSentMessage]);
 
   const handleDownloadReady = useCallback(
     (info: { fileName: string; downloadUrl: string; size: number }) => {
@@ -283,17 +332,19 @@ export default function TerminalView({ socket }: TerminalViewProps) {
 
   const handleComposeSend = useCallback(() => {
     if (!composeText) return;
+    addSentMessage(composeText);
     write(composeText + '\r');
     setComposeText('');
     composeRef.current?.focus();
-  }, [composeText, write]);
+  }, [composeText, write, addSentMessage]);
 
   const handleComposeRaw = useCallback(() => {
     if (!composeText) return;
+    addSentMessage(composeText);
     write(composeText);
     setComposeText('');
     composeRef.current?.focus();
-  }, [composeText, write]);
+  }, [composeText, write, addSentMessage]);
 
   return (
     <div className="flex flex-col h-[calc(100vh-52px)]">
@@ -357,13 +408,19 @@ export default function TerminalView({ socket }: TerminalViewProps) {
         </div>
       </div>
 
-      {/* Terminal output area */}
+      {/* Main content area */}
       <div className="flex-1 overflow-hidden relative">
-        <div ref={termContainerRef} className="absolute inset-0 pl-2" />
+        {/* xterm.js — always mounted, visible only in TTY mode */}
+        <div
+          ref={termContainerRef}
+          className={`absolute inset-0 pl-2 ${rawMode ? '' : 'invisible'}`}
+        />
 
-        {/* Touch-blocking overlay — prevents soft keyboard from opening on terminal tap */}
+        {/* Chat view — visible in compose mode */}
         {!rawMode && (
-          <div className="absolute inset-0 z-[5]" onClick={() => composeRef.current?.focus()} />
+          <div className="absolute inset-0 flex flex-col bg-surface-deep">
+            <ChatView messages={chatMessages} />
+          </div>
         )}
 
         {/* File explorer overlay */}
@@ -383,7 +440,7 @@ export default function TerminalView({ socket }: TerminalViewProps) {
       {/* Download notifications */}
       <FileNotifications downloads={downloads} onDismiss={dismissDownload} />
 
-      {/* Compose input — chat-style primary input */}
+      {/* Compose input — chat-style primary input (compose mode) */}
       {!rawMode && (
         <div className="px-2 py-2 bg-surface border-t border-border flex-shrink-0">
           <div className="flex items-end gap-2">
@@ -428,7 +485,7 @@ export default function TerminalView({ socket }: TerminalViewProps) {
         </div>
       )}
 
-      {/* Mobile extra keys — always visible for Ctrl+C etc */}
+      {/* Mobile extra keys — always visible */}
       <MobileKeyboard
         onKey={handleMobileKey}
         ctrlActive={ctrlActive}
