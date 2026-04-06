@@ -6,16 +6,72 @@ function escapeHtml(str: string): string {
 }
 
 // Basic markdown rendering for assistant text
+function isTableRow(line: string): boolean {
+  const trimmed = line.trim();
+  return trimmed.startsWith('|') && trimmed.endsWith('|') && trimmed.includes('|');
+}
+
+function isTableSeparator(line: string): boolean {
+  return /^\|[\s:]*[-]+[\s:]*(\|[\s:]*[-]+[\s:]*)+\|?\s*$/.test(line.trim());
+}
+
+function parseTableRow(line: string): string[] {
+  return line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => c.trim());
+}
+
+function renderTable(tableLines: string[]): string {
+  if (tableLines.length < 2) return tableLines.map((l) => `<div>${escapeHtml(l)}</div>`).join('');
+
+  const headerLine = tableLines[0];
+  const sepIndex = tableLines.findIndex((l) => isTableSeparator(l));
+  const headers = parseTableRow(headerLine);
+  const bodyLines = sepIndex >= 0 ? tableLines.slice(sepIndex + 1) : tableLines.slice(1);
+
+  let html = '<div class="my-2 overflow-x-auto"><table class="w-full text-xs border-collapse">';
+  // Header
+  html += '<thead><tr>';
+  for (const h of headers) {
+    html += `<th class="px-2 py-1.5 text-left font-medium text-text bg-surface-overlay border-b border-border whitespace-nowrap">${escapeHtml(h)}</th>`;
+  }
+  html += '</tr></thead>';
+  // Body
+  html += '<tbody>';
+  for (const line of bodyLines) {
+    if (!isTableRow(line) || isTableSeparator(line)) continue;
+    const cells = parseTableRow(line);
+    html += '<tr>';
+    for (let i = 0; i < Math.max(cells.length, headers.length); i++) {
+      const cell = cells[i] || '';
+      const isMatch = cell.toUpperCase() === 'MATCH';
+      const cellClass = isMatch ? 'text-green-400' : 'text-text-secondary';
+      html += `<td class="px-2 py-1 border-b border-border-subtle ${cellClass} whitespace-nowrap">${escapeHtml(cell)}</td>`;
+    }
+    html += '</tr>';
+  }
+  html += '</tbody></table></div>';
+  return html;
+}
+
 function renderMarkdown(text: string): string {
   const lines = text.split('\n');
   const result: string[] = [];
   let inCodeBlock = false;
   let codeLang = '';
   let codeLines: string[] = [];
+  let tableBuffer: string[] = [];
 
-  for (const line of lines) {
+  const flushTable = () => {
+    if (tableBuffer.length > 0) {
+      result.push(renderTable(tableBuffer));
+      tableBuffer = [];
+    }
+  };
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
     const fence = line.match(/^```(\w*)$/);
     if (fence) {
+      flushTable();
       if (inCodeBlock) {
         const langTag = codeLang ? `<div class="text-[10px] text-text-muted mb-1">${escapeHtml(codeLang)}</div>` : '';
         result.push(`<div class="my-1.5">${langTag}<pre class="bg-surface-deep rounded-lg px-3 py-2 overflow-x-auto text-xs font-mono leading-relaxed text-text-secondary"><code>${codeLines.join('\n')}</code></pre></div>`);
@@ -29,6 +85,13 @@ function renderMarkdown(text: string): string {
       continue;
     }
     if (inCodeBlock) { codeLines.push(escapeHtml(line)); continue; }
+
+    // Table accumulation
+    if (isTableRow(line) || isTableSeparator(line)) {
+      tableBuffer.push(line);
+      continue;
+    }
+    flushTable();
 
     let p = escapeHtml(line);
     p = p.replace(/\*\*(.+?)\*\*/g, '<strong class="font-semibold text-text">$1</strong>');
@@ -49,6 +112,8 @@ function renderMarkdown(text: string): string {
     if (p.trim() === '') { result.push('<div class="h-1.5"></div>'); continue; }
     result.push(`<div>${p}</div>`);
   }
+
+  flushTable();
 
   if (inCodeBlock && codeLines.length > 0) {
     result.push(`<pre class="bg-surface-deep rounded-lg px-3 py-2 overflow-x-auto text-xs font-mono leading-relaxed text-text-secondary"><code>${codeLines.join('\n')}</code></pre>`);
