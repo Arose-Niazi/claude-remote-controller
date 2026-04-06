@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import type { Socket } from 'socket.io-client';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
@@ -25,6 +25,9 @@ export default function TerminalView({ socket }: TerminalViewProps) {
     sessionId: string;
   }>();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const initialCmd = searchParams.get('cmd');
+  const cmdSentRef = useRef(false);
   const termContainerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -182,6 +185,17 @@ export default function TerminalView({ socket }: TerminalViewProps) {
       socket.off(TERMINAL_OUTPUT, handleOutput);
     };
   }, [socket, sessionId]);
+
+  // Auto-write initial command from ?cmd= param (e.g., Claude resume)
+  useEffect(() => {
+    if (!initialCmd || !sessionId || cmdSentRef.current) return;
+    cmdSentRef.current = true;
+    // Wait for shell prompt to appear
+    const timer = setTimeout(() => {
+      write(initialCmd + '\n');
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [initialCmd, sessionId, write]);
 
   const handleDetach = useCallback(() => {
     detach();

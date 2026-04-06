@@ -49,6 +49,8 @@ import {
   VPN_CONNECT,
   VPN_DISCONNECT,
   VPN_UPDATE,
+  CLAUDE_SESSIONS_LIST,
+  CLAUDE_SESSIONS_RESULT,
   type FilesListPayload,
   type FilesListResultPayload,
   type FilesDownloadPayload,
@@ -57,6 +59,8 @@ import {
   type VpnConnectPayload,
   type VpnDisconnectPayload,
   type VpnUpdatePayload,
+  type ClaudeSessionsListPayload,
+  type ClaudeSessionsResultPayload,
 } from '@crc/shared';
 
 import { config } from './config.js';
@@ -209,6 +213,11 @@ agentNs.on('connection', (socket) => {
     clientNs.emit(FILES_DOWNLOAD_READY, payload);
   });
 
+  // --- Claude sessions relay (agent -> client) ---
+  socket.on(CLAUDE_SESSIONS_RESULT, (payload: ClaudeSessionsResultPayload) => {
+    clientNs.emit(CLAUDE_SESSIONS_RESULT, { ...payload, agentId });
+  });
+
   socket.on(SESSION_BUFFER, (payload: SessionBufferPayload) => {
     const session = getSession(payload.sessionId);
     if (!session || !session.clientSocketId) return;
@@ -354,6 +363,14 @@ clientNs.on('connection', (socket) => {
     if (!agentId) return;
     const agentSocketId = getAgentSocketId(agentId);
     if (agentSocketId) agentNs.to(agentSocketId).emit(VPN_DISCONNECT, { profileId });
+  });
+
+  // --- Claude sessions relay (client -> agent) ---
+  socket.on(CLAUDE_SESSIONS_LIST, (payload: ClaudeSessionsListPayload) => {
+    const { agentId, projectPath } = payload;
+    if (!agentId) return;
+    const agentSocketId = getAgentSocketId(agentId);
+    if (agentSocketId) agentNs.to(agentSocketId).emit(CLAUDE_SESSIONS_LIST, { projectPath });
   });
 
   // --- File explorer relay (client -> agent) ---

@@ -5,6 +5,7 @@ import { SESSION_LIST, SESSION_KILL, SESSION_KILL_ALL, SESSION_RENAME } from '@c
 import type { TerminalSession } from '@crc/shared';
 import { useSessionStore } from '../stores/sessionStore';
 import VpnPanel from './VpnPanel';
+import ClaudeSessions from './ClaudeSessions';
 
 interface SessionManagerProps {
   socket: Socket | null;
@@ -25,6 +26,7 @@ export default function SessionManager({ socket }: SessionManagerProps) {
   const [renaming, setRenaming] = useState<string | null>(null);
   const [newName, setNewName] = useState('');
   const [showVpn, setShowVpn] = useState(false);
+  const [showClaude, setShowClaude] = useState(false);
 
   const agentSessions = sessions.filter((s) => s.agentId === agentId);
 
@@ -70,16 +72,28 @@ export default function SessionManager({ socket }: SessionManagerProps) {
           </button>
           <h2 className="text-lg font-medium">Sessions on {agentId}</h2>
         </div>
-        <button
-          onClick={() => setShowVpn(true)}
-          className="px-3 py-1.5 text-sm bg-slate-700 hover:bg-slate-600 rounded transition-colors"
-        >
-          VPN
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={() => setShowClaude(true)}
+            className="px-3 py-1.5 text-sm bg-purple-700 hover:bg-purple-600 rounded transition-colors"
+          >
+            Claude
+          </button>
+          <button
+            onClick={() => setShowVpn(true)}
+            className="px-3 py-1.5 text-sm bg-slate-700 hover:bg-slate-600 rounded transition-colors"
+          >
+            VPN
+          </button>
+        </div>
       </div>
 
       {showVpn && agentId && (
         <VpnPanel socket={socket} agentId={agentId} onClose={() => setShowVpn(false)} />
+      )}
+
+      {showClaude && agentId && (
+        <ClaudeSessions socket={socket} agentId={agentId} onClose={() => setShowClaude(false)} />
       )}
 
       <button

@@ -54,6 +54,12 @@ export const FILES_DOWNLOAD = 'files:download' as const;
 export const FILES_LIST_RESULT = 'files:list:result' as const;
 export const FILES_DOWNLOAD_READY = 'files:download:ready' as const;
 
+// --- Claude Sessions Events ---
+// Client -> Server
+export const CLAUDE_SESSIONS_LIST = 'claude:sessions:list' as const;
+// Agent -> Server -> Client
+export const CLAUDE_SESSIONS_RESULT = 'claude:sessions:result' as const;
+
 // --- File Events ---
 export const FILE_READY = 'file:ready' as const;
 export const FILE_EXPIRED = 'file:expired' as const;
@@ -163,6 +169,19 @@ export interface VpnDisconnectPayload {
 export interface VpnUpdatePayload {
   agentId?: string;
   profiles: import('./types.js').VpnProfile[];
+}
+
+// --- Claude Sessions Payloads ---
+
+export interface ClaudeSessionsListPayload {
+  agentId?: string;
+  projectPath?: string;       // optional: filter to one project. If omitted, list all.
+}
+
+export interface ClaudeSessionsResultPayload {
+  agentId?: string;
+  sessions: import('./types.js').ClaudeSessionInfo[];
+  error?: string;
 }
 
 export interface FileGrabPayload {

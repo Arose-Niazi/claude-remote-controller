@@ -72,6 +72,19 @@ export interface FileEntry {
   modified: number;
 }
 
+// --- Claude Sessions ---
+
+export interface ClaudeSessionInfo {
+  sessionId: string;
+  projectPath: string;
+  firstMessage: string;      // first user message (truncated)
+  lastTimestamp: string;      // ISO 8601
+  messageCount: number;
+  model?: string;
+  slug?: string;
+  gitBranch?: string;
+}
+
 // --- File Transfer ---
 
 export interface TransferInfo {

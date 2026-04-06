@@ -20,6 +20,8 @@ import {
   VPN_CONNECT,
   VPN_DISCONNECT,
   VPN_UPDATE,
+  CLAUDE_SESSIONS_LIST,
+  CLAUDE_SESSIONS_RESULT,
   HEARTBEAT_INTERVAL,
   type TerminalOpenPayload,
   type TerminalInputPayload,
@@ -31,6 +33,7 @@ import {
   type FilesDownloadPayload,
   type VpnConnectPayload,
   type VpnDisconnectPayload,
+  type ClaudeSessionsListPayload,
 } from '@crc/shared';
 
 import { loadConfig } from './config.js';
@@ -38,6 +41,7 @@ import { logger } from './logger.js';
 import { buildHeartbeat } from './heartbeat.js';
 import { listDirectory, downloadFile } from './file-explorer.js';
 import { getProfiles, connectVpn, disconnectVpn } from './vpn-manager.js';
+import { listClaudeSessions } from './claude-sessions.js';
 import {
   createTerminalSession,
   writeToSession,
@@ -180,6 +184,12 @@ socket.on(VPN_CONNECT, async (payload: VpnConnectPayload) => {
 socket.on(VPN_DISCONNECT, async (payload: VpnDisconnectPayload) => {
   const profiles = await disconnectVpn(vpnProfiles, payload.profileId);
   socket.emit(VPN_UPDATE, { profiles });
+});
+
+// --- Claude Sessions handler ---
+socket.on(CLAUDE_SESSIONS_LIST, async (payload: ClaudeSessionsListPayload) => {
+  const sessions = await listClaudeSessions(payload.projectPath);
+  socket.emit(CLAUDE_SESSIONS_RESULT, { sessions });
 });
 
 // Graceful shutdown
