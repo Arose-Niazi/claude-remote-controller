@@ -37,6 +37,8 @@ export default function TerminalView({ socket }: TerminalViewProps) {
   const [showFiles, setShowFiles] = useState(false);
   const [ctrlActive, setCtrlActive] = useState(false);
   const [altActive, setAltActive] = useState(false);
+  const [composeText, setComposeText] = useState('');
+  const composeRef = useRef<HTMLInputElement>(null);
   const ctrlRef = useRef(false);
   const altRef = useRef(false);
   const [downloads, setDownloads] = useState<
@@ -338,6 +340,51 @@ export default function TerminalView({ socket }: TerminalViewProps) {
 
       {/* Download notifications */}
       <FileNotifications downloads={downloads} onDismiss={dismissDownload} />
+
+      {/* Compose input — type/paste text locally, send on Enter */}
+      <div className="flex items-center gap-1 px-2 py-1 bg-surface border-t border-border flex-shrink-0">
+        <input
+          ref={composeRef}
+          type="text"
+          value={composeText}
+          onChange={(e) => setComposeText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && composeText) {
+              write(composeText + '\n');
+              setComposeText('');
+            }
+          }}
+          placeholder="Type or paste text..."
+          className="flex-1 px-3 py-1.5 text-xs bg-surface-deep border border-border rounded-lg text-text placeholder:text-text-muted focus:outline-none focus:border-accent"
+        />
+        <button
+          onClick={() => {
+            if (composeText) {
+              write(composeText + '\n');
+              setComposeText('');
+              composeRef.current?.focus();
+            }
+          }}
+          disabled={!composeText}
+          className="px-3 py-1.5 text-xs bg-accent hover:bg-accent-hover text-white rounded-lg transition-colors disabled:opacity-30 flex-shrink-0"
+        >
+          Send
+        </button>
+        <button
+          onClick={() => {
+            if (composeText) {
+              write(composeText);
+              setComposeText('');
+              composeRef.current?.focus();
+            }
+          }}
+          disabled={!composeText}
+          className="px-2 py-1.5 text-xs bg-surface-raised hover:bg-surface-overlay border border-border-subtle text-text-secondary rounded-lg transition-colors disabled:opacity-30 flex-shrink-0"
+          title="Send without Enter (raw paste)"
+        >
+          Raw
+        </button>
+      </div>
 
       {/* Mobile extra keys */}
       <MobileKeyboard
