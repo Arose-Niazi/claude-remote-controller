@@ -19,6 +19,13 @@ function parseTableRow(line: string): string[] {
   return line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => c.trim());
 }
 
+function inlineMarkdown(text: string): string {
+  let s = escapeHtml(text);
+  s = s.replace(/\*\*(.+?)\*\*/g, '<strong class="font-semibold text-text">$1</strong>');
+  s = s.replace(/`([^`]+)`/g, '<code class="bg-surface-deep px-1 py-0.5 rounded text-accent text-xs font-mono">$1</code>');
+  return s;
+}
+
 function renderTable(tableLines: string[]): string {
   if (tableLines.length < 2) return tableLines.map((l) => `<div>${escapeHtml(l)}</div>`).join('');
 
@@ -31,7 +38,7 @@ function renderTable(tableLines: string[]): string {
   // Header
   html += '<thead><tr>';
   for (const h of headers) {
-    html += `<th class="px-2 py-1.5 text-left font-medium text-text bg-surface-overlay border-b border-border whitespace-nowrap">${escapeHtml(h)}</th>`;
+    html += `<th class="px-2 py-1.5 text-left font-medium text-text bg-surface-overlay border-b border-border whitespace-nowrap">${inlineMarkdown(h)}</th>`;
   }
   html += '</tr></thead>';
   // Body
@@ -44,7 +51,7 @@ function renderTable(tableLines: string[]): string {
       const cell = cells[i] || '';
       const isMatch = cell.toUpperCase() === 'MATCH';
       const cellClass = isMatch ? 'text-green-400' : 'text-text-secondary';
-      html += `<td class="px-2 py-1 border-b border-border-subtle ${cellClass} whitespace-nowrap">${escapeHtml(cell)}</td>`;
+      html += `<td class="px-2 py-1 border-b border-border-subtle ${cellClass} whitespace-nowrap">${inlineMarkdown(cell)}</td>`;
     }
     html += '</tr>';
   }
