@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import type { Socket } from 'socket.io-client';
-import { SESSION_LIST, SESSION_KILL, SESSION_KILL_ALL, SESSION_RENAME } from '@crc/shared';
-import type { TerminalSession } from '@crc/shared';
+import { SESSION_LIST, SESSION_KILL, SESSION_KILL_ALL, SESSION_RENAME, AGENT_EXEC, AGENT_EXEC_RESULT } from '@crc/shared';
+import type { TerminalSession, AgentExecResultPayload } from '@crc/shared';
 import { useSessionStore } from '../stores/sessionStore';
 import VpnPanel from './VpnPanel';
 import ClaudeSessions from './ClaudeSessions';
@@ -30,6 +30,7 @@ export default function SessionManager({ socket }: SessionManagerProps) {
   const [showVpn, setShowVpn] = useState(false);
   const [showClaude, setShowClaude] = useState(false);
   const [showBrowse, setShowBrowse] = useState(false);
+  const [permPrompt, setPermPrompt] = useState<{ path: string } | null>(null);
   const agents = useAgentStore((s) => s.agents);
   const agent = agents.find((a) => a.id === agentId);
   const browseInitialPath = agent?.homeDirectory || '/';
@@ -117,12 +118,69 @@ export default function SessionManager({ socket }: SessionManagerProps) {
               initialPath={browseInitialPath}
               onClose={() => setShowBrowse(false)}
               onDownloadReady={() => {}}
-              onStartClaude={(path) => {
-                setShowBrowse(false);
-                const cmd = `cd ${JSON.stringify(path)} && claude`;
-                navigate(`/terminal/${agentId}/new?cmd=${encodeURIComponent(cmd)}`);
+              onStartClaude={(path, hasClaudeSettings) => {
+                if (hasClaudeSettings) {
+                  setShowBrowse(false);
+                  const cmd = `cd ${JSON.stringify(path)} && claude`;
+                  navigate(`/terminal/${agentId}/new?cmd=${encodeURIComponent(cmd)}`);
+                } else {
+                  setPermPrompt({ path });
+                }
               }}
             />
+          </div>
+        </div>
+      )}
+
+      {/* Permission mode prompt when starting Claude in a new project */}
+      {permPrompt && agentId && (
+        <div className="fixed inset-0 z-50 bg-slate-900/80 flex items-center justify-center p-4">
+          <div className="bg-slate-800 border border-slate-700 rounded-xl w-full max-w-sm shadow-2xl p-5">
+            <h3 className="text-sm font-semibold mb-1">Setup Claude</h3>
+            <p className="text-xs text-slate-400 mb-4">
+              No <code>.claude/settings.json</code> found in this project. Choose a permission mode:
+            </p>
+            <div className="space-y-2">
+              {[
+                { mode: 'bypassPermissions', label: 'Bypass Permissions', desc: 'No confirmation prompts (fastest)' },
+                { mode: 'default', label: 'Default', desc: 'Ask before risky operations' },
+                { mode: 'plan', label: 'Plan Mode', desc: 'Read-only, suggest changes only' },
+              ].map(({ mode, label, desc }) => (
+                <button
+                  key={mode}
+                  onClick={() => {
+                    const settingsJson = JSON.stringify(
+                      { permissions: { defaultMode: mode }, effortLevel: 'high' },
+                      null,
+                      4
+                    );
+                    const escaped = settingsJson.replace(/'/g, "'\\''");
+                    const cmd = `mkdir -p '${permPrompt.path}/.claude' && echo '${escaped}' > '${permPrompt.path}/.claude/settings.json'`;
+                    socket?.emit(AGENT_EXEC, { agentId, command: cmd, cwd: permPrompt.path });
+
+                    // Listen for result then navigate
+                    const onResult = (_payload: AgentExecResultPayload) => {
+                      socket?.off(AGENT_EXEC_RESULT, onResult);
+                      setPermPrompt(null);
+                      setShowBrowse(false);
+                      const startCmd = `cd ${JSON.stringify(permPrompt.path)} && claude`;
+                      navigate(`/terminal/${agentId}/new?cmd=${encodeURIComponent(startCmd)}`);
+                    };
+                    socket?.on(AGENT_EXEC_RESULT, onResult);
+                  }}
+                  className="w-full text-left px-4 py-3 rounded-lg border border-slate-600 hover:border-blue-500 hover:bg-slate-700/50 transition-colors"
+                >
+                  <div className="text-sm font-medium">{label}</div>
+                  <div className="text-xs text-slate-400">{desc}</div>
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={() => setPermPrompt(null)}
+              className="w-full mt-3 py-1.5 text-xs text-slate-400 hover:text-slate-200 transition-colors"
+            >
+              Cancel
+            </button>
           </div>
         </div>
       )}

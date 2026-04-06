@@ -16,7 +16,7 @@ interface FileExplorerProps {
   initialPath: string;
   onClose: () => void;
   onDownloadReady: (info: { fileName: string; downloadUrl: string; size: number }) => void;
-  onStartClaude?: (path: string) => void;
+  onStartClaude?: (path: string, hasClaudeSettings: boolean) => void;
 }
 
 function formatSize(bytes: number): string {
@@ -45,6 +45,7 @@ export default function FileExplorer({
   const [gitPullMsg, setGitPullMsg] = useState('');
 
   const isGitRepo = entries.some((e) => e.isDirectory && e.name === '.git');
+  const hasClaudeDir = entries.some((e) => e.isDirectory && e.name === '.claude');
 
   const handleGitPull = () => {
     if (!socket) return;
@@ -182,7 +183,7 @@ export default function FileExplorer({
         <div className="flex items-center gap-1 ml-2 flex-shrink-0">
           {onStartClaude && (
             <button
-              onClick={() => onStartClaude(currentPath)}
+              onClick={() => onStartClaude(currentPath, hasClaudeDir)}
               className="px-2 py-0.5 text-xs bg-purple-700 hover:bg-purple-600 text-white rounded"
               title="Start Claude here"
             >
