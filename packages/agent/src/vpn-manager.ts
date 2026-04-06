@@ -29,10 +29,32 @@ function getConfigPath(profile: VpnProfileConfig): string {
   return path.join(VPN_DIR, file);
 }
 
+// ========== macOS scutil helpers ==========
+
+async function getScutilStatus(serviceName: string): Promise<VpnStatus> {
+  const { stdout } = await runCmd(`scutil --nc status '${serviceName}'`);
+  const firstLine = stdout.trim().split('\n')[0];
+  if (firstLine === 'Connected') return 'connected';
+  if (firstLine === 'Connecting') return 'connecting';
+  if (firstLine === 'Disconnecting') return 'disconnecting';
+  return 'disconnected';
+}
+
+async function scutilStart(serviceName: string): Promise<string | null> {
+  const { stderr } = await runCmd(`scutil --nc start '${serviceName}'`);
+  return stderr || null;
+}
+
+async function scutilStop(serviceName: string): Promise<string | null> {
+  const { stderr } = await runCmd(`scutil --nc stop '${serviceName}'`);
+  return stderr || null;
+}
+
 // ========== STATUS ==========
 
-async function getWireGuardStatus(tunnelName: string): Promise<VpnStatus> {
+async function getWireGuardStatus(profile: VpnProfileConfig): Promise<VpnStatus> {
   if (isWindows) {
+    const tunnelName = profile.tunnelName || profile.id;
     const { stdout } = await runCmd(
       `Get-Service -Name 'WireGuardTunnel$${tunnelName}' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Status`
     );
@@ -42,6 +64,12 @@ async function getWireGuardStatus(tunnelName: string): Promise<VpnStatus> {
     if (s === 'StopPending') return 'disconnecting';
     return 'disconnected';
   }
+  // macOS: use scutil --nc if serviceName is configured
+  if (profile.serviceName) {
+    return getScutilStatus(profile.serviceName);
+  }
+  // Fallback: wg-quick CLI
+  const tunnelName = profile.tunnelName || profile.id;
   const { stdout } = await runCmd(`wg show ${tunnelName} 2>/dev/null`);
   return stdout.trim() ? 'connected' : 'disconnected';
 }
@@ -61,17 +89,35 @@ async function getOpenVpnStatus(profile: VpnProfileConfig): Promise<VpnStatus> {
     }
     return 'disconnected';
   }
-  // macOS: check if openvpn process is running
+  // macOS: use scutil --nc if serviceName is configured
+  if (profile.serviceName) {
+    return getScutilStatus(profile.serviceName);
+  }
+  // Fallback: check if openvpn process is running
   const { stdout } = await runCmd('pgrep -f "openvpn.*\\.ovpn" | head -1');
   return stdout.trim() ? 'connected' : 'disconnected';
+}
+
+async function getAzureStatus(profile: VpnProfileConfig): Promise<VpnStatus> {
+  if (isWindows) {
+    // Windows: same as OpenVPN (ovpnconnector-based)
+    return getOpenVpnStatus(profile);
+  }
+  // macOS: Azure VPN Client registers as a network extension
+  if (profile.serviceName) {
+    return getScutilStatus(profile.serviceName);
+  }
+  return 'disconnected';
 }
 
 async function getStatus(profile: VpnProfileConfig): Promise<VpnStatus> {
   try {
     if (profile.type === 'wireguard') {
-      return await getWireGuardStatus(profile.tunnelName || profile.id);
+      return await getWireGuardStatus(profile);
     }
-    // Both openvpn and azure use the same ovpnconnector mechanism
+    if (profile.type === 'azure') {
+      return await getAzureStatus(profile);
+    }
     return await getOpenVpnStatus(profile);
   } catch (err: any) {
     logger.error({ profile: profile.id, error: err.message }, 'Status check failed');
@@ -83,9 +129,9 @@ async function getStatus(profile: VpnProfileConfig): Promise<VpnStatus> {
 
 async function connectWireGuard(profile: VpnProfileConfig): Promise<string | null> {
   const tunnelName = profile.tunnelName || profile.id;
-  const confPath = getConfigPath(profile);
 
   if (isWindows) {
+    const confPath = getConfigPath(profile);
     if (!fs.existsSync(confPath)) {
       return `Config file not found: ${confPath}`;
     }
@@ -96,18 +142,22 @@ async function connectWireGuard(profile: VpnProfileConfig): Promise<string | nul
     if (stderr && !stderr.includes('running')) return stderr.trim();
     return null;
   }
-  // macOS
+  // macOS: use scutil --nc if serviceName is configured
+  if (profile.serviceName) {
+    return scutilStart(profile.serviceName);
+  }
+  // Fallback: wg-quick CLI (requires sudo + brew install wireguard-tools)
+  const confPath = getConfigPath(profile);
   const { stderr } = await runCmd(`sudo wg-quick up ${confPath}`);
   return stderr || null;
 }
 
 async function connectOpenVpn(profile: VpnProfileConfig): Promise<string | null> {
-  const confPath = getConfigPath(profile);
-  if (!fs.existsSync(confPath)) {
-    return `Config file not found: ${confPath}`;
-  }
-
   if (isWindows) {
+    const confPath = getConfigPath(profile);
+    if (!fs.existsSync(confPath)) {
+      return `Config file not found: ${confPath}`;
+    }
     const connector = 'C:\\Program Files\\OpenVPN Connect\\ovpnconnector.exe';
     // Kill GUI app if running (conflicts with ovpnconnector)
     await runCmd(`Stop-Process -Name 'OpenVPNConnect' -Force -ErrorAction SilentlyContinue`);
@@ -129,37 +179,52 @@ async function connectOpenVpn(profile: VpnProfileConfig): Promise<string | null>
     }
     return null;
   }
-  // macOS: run openvpn in background
+  // macOS: use scutil --nc if serviceName is configured (OpenVPN Connect app)
+  if (profile.serviceName) {
+    return scutilStart(profile.serviceName);
+  }
+  // Fallback: openvpn CLI (requires sudo + brew install openvpn)
+  const confPath = getConfigPath(profile);
+  if (!fs.existsSync(confPath)) {
+    return `Config file not found: ${confPath}`;
+  }
   const { stderr } = await runCmd(`sudo openvpn --config '${confPath}' --daemon`);
   return stderr || null;
 }
 
 async function connectAzure(profile: VpnProfileConfig): Promise<string | null> {
-  const confPath = getConfigPath(profile);
-  if (!fs.existsSync(confPath)) {
-    return `Config file not found: ${confPath}`;
-  }
-
   if (isWindows) {
+    const confPath = getConfigPath(profile);
+    if (!fs.existsSync(confPath)) {
+      return `Config file not found: ${confPath}`;
+    }
     // Import the XML config into Azure VPN Client and open the app
-    // azurevpn -i imports the profile, then the app opens for user to authenticate
     await runCmd(`& 'AzureVpn.exe' -i '${confPath}' 2>&1`);
-    // Give it time to import and open
     await new Promise((r) => setTimeout(r, 2000));
-    // Open the app
     await runCmd(`Start-Process 'shell:AppsFolder\\Microsoft.AzureVpn_8wekyb3d8bbwe!App'`);
     return 'Azure VPN app opened — requires Azure AD sign-in to connect';
   }
-  return 'Azure VPN not supported on macOS CLI';
+  // macOS: Azure VPN Client registers as a network extension — use scutil
+  if (profile.serviceName) {
+    const err = await scutilStart(profile.serviceName);
+    if (err) return err;
+    // Azure VPN may need the app open for AAD auth if not cached
+    await runCmd(`open -a 'Azure VPN Client'`);
+    return null;
+  }
+  return 'Azure VPN: set serviceName in config (from scutil --nc list)';
 }
 
-async function disconnectAzure(): Promise<string | null> {
+async function disconnectAzure(profile: VpnProfileConfig): Promise<string | null> {
   if (isWindows) {
-    // Open the app for disconnect — Azure AD VPN can't be disconnected headlessly
     await runCmd(`Start-Process 'shell:AppsFolder\\Microsoft.AzureVpn_8wekyb3d8bbwe!App'`);
     return 'Azure VPN app opened — disconnect from the app';
   }
-  return 'Azure VPN not supported on macOS CLI';
+  // macOS: use scutil to disconnect
+  if (profile.serviceName) {
+    return scutilStop(profile.serviceName);
+  }
+  return 'Azure VPN: set serviceName in config (from scutil --nc list)';
 }
 
 // ========== DISCONNECT ==========
@@ -171,6 +236,11 @@ async function disconnectWireGuard(profile: VpnProfileConfig): Promise<string | 
     if (stderr && !stderr.includes('running') && !stderr.includes('stopped')) return stderr.trim();
     return null;
   }
+  // macOS: use scutil --nc if serviceName is configured
+  if (profile.serviceName) {
+    return scutilStop(profile.serviceName);
+  }
+  // Fallback: wg-quick CLI
   const confPath = getConfigPath(profile);
   const { stderr } = await runCmd(`sudo wg-quick down ${confPath}`);
   return stderr || null;
@@ -184,7 +254,11 @@ async function disconnectOpenVpn(profile: VpnProfileConfig): Promise<string | nu
     if (output.toLowerCase().includes('error')) return output.trim();
     return null;
   }
-  // macOS: kill openvpn process
+  // macOS: use scutil --nc if serviceName is configured
+  if (profile.serviceName) {
+    return scutilStop(profile.serviceName);
+  }
+  // Fallback: kill openvpn process
   await runCmd('sudo pkill -f "openvpn.*\\.ovpn"');
   return null;
 }
@@ -243,7 +317,7 @@ export async function disconnectVpn(
   if (cfg.type === 'wireguard') {
     error = await disconnectWireGuard(cfg);
   } else if (cfg.type === 'azure') {
-    error = await disconnectAzure();
+    error = await disconnectAzure(cfg);
   } else {
     error = await disconnectOpenVpn(cfg);
   }
