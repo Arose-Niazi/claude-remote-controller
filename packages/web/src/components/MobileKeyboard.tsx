@@ -6,6 +6,14 @@ interface MobileKeyboardProps {
   onToggleAlt: () => void;
 }
 
+interface KeyDef {
+  label: string;
+  action?: () => void;
+  charCode?: number;
+  active?: boolean;
+  toggle?: boolean;
+}
+
 export default function MobileKeyboard({
   onKey,
   ctrlActive,
@@ -13,7 +21,7 @@ export default function MobileKeyboard({
   onToggleCtrl,
   onToggleAlt,
 }: MobileKeyboardProps) {
-  const keys = [
+  const keys: KeyDef[] = [
     { label: 'ESC', action: () => onKey('\x1b') },
     { label: 'TAB', action: () => onKey('\t') },
     {
@@ -28,8 +36,8 @@ export default function MobileKeyboard({
       active: altActive,
       toggle: true,
     },
-    { label: 'C-c', action: () => onKey('\x03') },
-    { label: 'C-z', action: () => onKey('\x1a') },
+    { label: 'C-c', charCode: 3 },
+    { label: 'C-z', charCode: 26 },
     { label: '\u2191', action: () => onKey('\x1b[A') },
     { label: '\u2193', action: () => onKey('\x1b[B') },
     { label: '\u2190', action: () => onKey('\x1b[D') },
@@ -43,7 +51,11 @@ export default function MobileKeyboard({
           key={k.label}
           onPointerDown={(e) => {
             e.preventDefault();
-            k.action();
+            if (k.charCode !== undefined) {
+              onKey(String.fromCharCode(k.charCode));
+            } else if (k.action) {
+              k.action();
+            }
           }}
           className={`flex-1 py-2 text-xs font-medium rounded transition-colors select-none ${
             k.toggle && k.active
