@@ -378,6 +378,11 @@ clientNs.on('connection', (socket) => {
   // --- Terminal I/O (unchanged) ---
   socket.on(TERMINAL_INPUT, (payload: TerminalInputPayload) => {
     const session = getSession(payload.sessionId);
+    // Debug: log control characters
+    if (payload.data.length <= 2) {
+      const hex = Buffer.from(payload.data).toString('hex');
+      logger.info({ sessionId: payload.sessionId, hex, hasSession: !!session }, 'TERMINAL_INPUT ctrl');
+    }
     if (!session) return;
     agentNs.to(session.agentSocketId).emit(TERMINAL_INPUT, payload);
   });

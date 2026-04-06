@@ -32,7 +32,17 @@ export function createTerminalSession(
 }
 
 export function writeToSession(sessionId: string, data: string): void {
-  sessions.get(sessionId)?.write(data);
+  const session = sessions.get(sessionId);
+  if (!session) {
+    logger.warn({ sessionId }, 'writeToSession: session not found');
+    return;
+  }
+  // Debug: log control characters
+  if (data.length <= 2) {
+    const hex = Buffer.from(data).toString('hex');
+    logger.info({ sessionId, hex, len: data.length }, 'writeToSession control char');
+  }
+  session.write(data);
 }
 
 export function resizeSession(sessionId: string, cols: number, rows: number): void {
