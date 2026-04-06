@@ -12,14 +12,12 @@ import { useAgentStore } from '../stores/agentStore';
 import MobileKeyboard from './MobileKeyboard';
 import FileExplorer from './FileExplorer';
 import FileNotifications from './FileNotifications';
-import ChatView, { type ChatMessage } from './ChatView';
 
 interface TerminalViewProps {
   socket: Socket | null;
 }
 
 let downloadCounter = 0;
-let msgCounter = 0;
 
 export default function TerminalView({ socket }: TerminalViewProps) {
   const { agentId, sessionId: paramSessionId } = useParams<{
@@ -41,40 +39,10 @@ export default function TerminalView({ socket }: TerminalViewProps) {
   const [ctrlActive, setCtrlActive] = useState(false);
   const [altActive, setAltActive] = useState(false);
   const [composeText, setComposeText] = useState('');
+  const [sentToast, setSentToast] = useState('');
   const composeRef = useRef<HTMLTextAreaElement>(null);
   const ctrlRef = useRef(false);
   const altRef = useRef(false);
-
-  // Chat message tracking — streaming appends to last received message
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
-  const updateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const appendOutput = useCallback((data: string) => {
-    setChatMessages((prev) => {
-      const last = prev[prev.length - 1];
-      if (last && last.type === 'received') {
-        // Append to existing received message
-        const updated = [...prev];
-        updated[updated.length - 1] = { ...last, text: last.text + data };
-        return updated;
-      }
-      // Create new received message
-      return [...prev, { id: ++msgCounter, type: 'received', text: data, timestamp: Date.now() }];
-    });
-    // Throttle re-renders: batch rapid updates
-    if (updateTimerRef.current) clearTimeout(updateTimerRef.current);
-    updateTimerRef.current = setTimeout(() => {
-      setChatMessages((prev) => [...prev]); // force re-render
-    }, 150);
-  }, []);
-
-  const addSentMessage = useCallback((text: string) => {
-    setChatMessages((prev) => [
-      ...prev,
-      { id: ++msgCounter, type: 'sent', text, timestamp: Date.now() },
-    ]);
-  }, []);
-
   const [downloads, setDownloads] = useState<
     { id: number; fileName: string; downloadUrl: string; size: number }[]
   >([]);
@@ -99,11 +67,9 @@ export default function TerminalView({ socket }: TerminalViewProps) {
     existingSessionId: isNewSession ? undefined : paramSessionId,
     onExit: () => {
       termRef.current?.write('\r\n\x1b[33m[Session ended]\x1b[0m\r\n');
-      appendOutput('\x1b[33m[Session ended]\x1b[0m');
     },
     onBuffer: (data) => {
       termRef.current?.write(data);
-      appendOutput(data);
     },
     onDetached: (reason) => {
       termRef.current?.write(`\r\n\x1b[33m[Detached: ${reason}]\x1b[0m\r\n`);
@@ -219,14 +185,22 @@ export default function TerminalView({ socket }: TerminalViewProps) {
     }
   }, [rawMode]);
 
-  // Wire up terminal output — feeds both xterm AND chat view
+  // Refit terminal when switching modes (container visibility changes size)
+  useEffect(() => {
+    setTimeout(() => {
+      fitAddonRef.current?.fit();
+      const term = termRef.current;
+      if (term) resize(term.cols, term.rows);
+    }, 50);
+  }, [rawMode, resize]);
+
+  // Wire up terminal output
   useEffect(() => {
     if (!socket || !termRef.current) return;
 
     const handleOutput = (payload: { sessionId: string; data: string }) => {
       if (payload.sessionId === sessionId) {
         termRef.current?.write(payload.data);
-        appendOutput(payload.data);
       }
     };
 
@@ -234,7 +208,7 @@ export default function TerminalView({ socket }: TerminalViewProps) {
     return () => {
       socket.off(TERMINAL_OUTPUT, handleOutput);
     };
-  }, [socket, sessionId, appendOutput]);
+  }, [socket, sessionId]);
 
   // Auto-write initial command from ?cmd= param
   useEffect(() => {
@@ -242,10 +216,9 @@ export default function TerminalView({ socket }: TerminalViewProps) {
     cmdSentRef.current = true;
     const timer = setTimeout(() => {
       write(initialCmd + '\r');
-      addSentMessage(initialCmd);
     }, 500);
     return () => clearTimeout(timer);
-  }, [initialCmd, sessionId, write, addSentMessage]);
+  }, [initialCmd, sessionId, write]);
 
   const handleDetach = useCallback(() => {
     detach();
@@ -294,7 +267,6 @@ export default function TerminalView({ socket }: TerminalViewProps) {
         const origin = window.location.origin;
         const cmd = `curl -o "${result.fileName}" "${origin}${result.downloadUrl}"`;
         write(cmd + '\r');
-        addSentMessage(cmd);
       }
     } catch {
       termRef.current?.write('\r\n\x1b[31m[Upload failed]\x1b[0m\r\n');
@@ -302,7 +274,7 @@ export default function TerminalView({ socket }: TerminalViewProps) {
       setUploading(false);
       input.value = '';
     }
-  }, [token, write, addSentMessage]);
+  }, [token, write]);
 
   const handleDownloadReady = useCallback(
     (info: { fileName: string; downloadUrl: string; size: number }) => {
@@ -318,21 +290,27 @@ export default function TerminalView({ socket }: TerminalViewProps) {
     setDownloads((prev) => prev.filter((d) => d.id !== id));
   }, []);
 
+  const showSentToast = useCallback((text: string) => {
+    const preview = text.length > 60 ? text.slice(0, 60) + '...' : text;
+    setSentToast(preview);
+    setTimeout(() => setSentToast(''), 2000);
+  }, []);
+
   const handleComposeSend = useCallback(() => {
     if (!composeText) return;
-    addSentMessage(composeText);
+    showSentToast(composeText);
     write(composeText + '\r');
     setComposeText('');
     composeRef.current?.focus();
-  }, [composeText, write, addSentMessage]);
+  }, [composeText, write, showSentToast]);
 
   const handleComposeRaw = useCallback(() => {
     if (!composeText) return;
-    addSentMessage(composeText);
+    showSentToast(composeText);
     write(composeText);
     setComposeText('');
     composeRef.current?.focus();
-  }, [composeText, write, addSentMessage]);
+  }, [composeText, write, showSentToast]);
 
   return (
     <div className="flex flex-col h-[calc(100vh-52px)]">
@@ -343,8 +321,8 @@ export default function TerminalView({ socket }: TerminalViewProps) {
         onChange={handleUpload}
       />
 
-      {/* Toolbar */}
-      <div className="flex items-center gap-2 px-2 py-1.5 bg-surface border-b border-border overflow-x-auto flex-shrink-0">
+      {/* Toolbar — always visible, never scrolls */}
+      <div className="flex items-center gap-2 px-2 py-1.5 bg-surface border-b border-border overflow-x-auto flex-shrink-0 z-20">
         <button
           onClick={handleDetach}
           className="px-2 py-1 text-xs bg-surface-raised hover:bg-surface-overlay border border-border-subtle text-text-secondary rounded-lg transition-colors whitespace-nowrap flex-shrink-0"
@@ -383,7 +361,7 @@ export default function TerminalView({ socket }: TerminalViewProps) {
                 ? 'bg-accent text-white'
                 : 'bg-surface-raised hover:bg-surface-overlay border border-border-subtle text-text-secondary'
             }`}
-            title="Toggle raw terminal mode (direct keyboard input)"
+            title="Raw terminal mode (direct keyboard)"
           >
             TTY
           </button>
@@ -396,18 +374,22 @@ export default function TerminalView({ socket }: TerminalViewProps) {
         </div>
       </div>
 
-      {/* Main content area */}
+      {/* Terminal output — always visible, xterm handles all rendering */}
       <div className="flex-1 overflow-hidden relative">
-        {/* xterm.js — always mounted, visible only in TTY mode */}
-        <div
-          ref={termContainerRef}
-          className={`absolute inset-0 pl-2 ${rawMode ? '' : 'invisible'}`}
-        />
+        <div ref={termContainerRef} className="absolute inset-0 pl-1" />
 
-        {/* Chat view — visible in compose mode */}
+        {/* Touch blocker in compose mode — tapping terminal focuses compose input */}
         {!rawMode && (
-          <div className="absolute inset-0 flex flex-col bg-surface-deep">
-            <ChatView messages={chatMessages} />
+          <div
+            className="absolute inset-0 z-[5]"
+            onClick={() => composeRef.current?.focus()}
+          />
+        )}
+
+        {/* Sent command toast */}
+        {sentToast && !rawMode && (
+          <div className="absolute bottom-2 right-2 z-[6] bg-accent/90 text-white text-xs px-3 py-1.5 rounded-xl shadow-lg max-w-[70%] truncate backdrop-blur-sm">
+            {sentToast}
           </div>
         )}
 
@@ -428,7 +410,7 @@ export default function TerminalView({ socket }: TerminalViewProps) {
       {/* Download notifications */}
       <FileNotifications downloads={downloads} onDismiss={dismissDownload} />
 
-      {/* Compose input — chat-style primary input (compose mode) */}
+      {/* Compose input — visible in compose mode */}
       {!rawMode && (
         <div className="px-2 py-2 bg-surface border-t border-border flex-shrink-0">
           <div className="flex items-end gap-2">
@@ -473,7 +455,7 @@ export default function TerminalView({ socket }: TerminalViewProps) {
         </div>
       )}
 
-      {/* Mobile extra keys — always visible */}
+      {/* Mobile extra keys */}
       <MobileKeyboard
         onKey={handleMobileKey}
         ctrlActive={ctrlActive}
