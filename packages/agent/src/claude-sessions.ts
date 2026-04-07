@@ -4,6 +4,7 @@ import os from 'os';
 import readline from 'readline';
 import type { ClaudeSessionInfo } from '@crc/shared';
 import { logger } from './logger.js';
+import { encodeProjectPath, findProjectDirs } from './claude-path.js';
 
 const CLAUDE_PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
 
@@ -86,15 +87,8 @@ export async function listClaudeSessions(filterProjectPath?: string): Promise<Cl
       const full = path.join(CLAUDE_PROJECTS_DIR, d);
       return fs.statSync(full).isDirectory();
     });
-    // Try exact encoding match first
-    const encoded = filterProjectPath.replace(/^\//, '-').replace(/\//g, '-');
-    if (allDirs.includes(encoded)) {
-      projectDirs = [encoded];
-    } else {
-      // Partial match: check all dirs
-      projectDirs = allDirs.filter((d) => d.includes(encoded.split('-').slice(-2).join('-')));
-      if (projectDirs.length === 0) return sessions;
-    }
+    projectDirs = findProjectDirs(allDirs, filterProjectPath);
+    if (projectDirs.length === 0) return sessions;
   } else {
     projectDirs = fs.readdirSync(CLAUDE_PROJECTS_DIR).filter((d) => {
       const full = path.join(CLAUDE_PROJECTS_DIR, d);

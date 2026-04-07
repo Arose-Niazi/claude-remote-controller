@@ -3,6 +3,7 @@ import path from 'path';
 import os from 'os';
 import readline from 'readline';
 import { logger } from './logger.js';
+import { encodeProjectPath } from './claude-path.js';
 
 const CLAUDE_PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
 
@@ -21,12 +22,24 @@ export interface ConversationData {
   totalLines: number;
 }
 
-function findLatestSessionFile(projectPath: string): { filePath: string; sessionId: string } | null {
-  // Encode project path to directory name
-  const encoded = projectPath.replace(/^\//, '-').replace(/\//g, '-');
+function findProjectDir(encoded: string): string | null {
   const dirPath = path.join(CLAUDE_PROJECTS_DIR, encoded);
+  if (fs.existsSync(dirPath)) return dirPath;
 
-  if (!fs.existsSync(dirPath)) return null;
+  // Case-insensitive fallback (Windows drive letters may differ in case)
+  if (!fs.existsSync(CLAUDE_PROJECTS_DIR)) return null;
+  const lowerEncoded = encoded.toLowerCase();
+  const match = fs.readdirSync(CLAUDE_PROJECTS_DIR).find(
+    (d) => d.toLowerCase() === lowerEncoded && fs.statSync(path.join(CLAUDE_PROJECTS_DIR, d)).isDirectory()
+  );
+  return match ? path.join(CLAUDE_PROJECTS_DIR, match) : null;
+}
+
+function findLatestSessionFile(projectPath: string): { filePath: string; sessionId: string } | null {
+  const encoded = encodeProjectPath(projectPath);
+  const dirPath = findProjectDir(encoded);
+
+  if (!dirPath) return null;
 
   const files = fs.readdirSync(dirPath)
     .filter((f) => f.endsWith('.jsonl') && !f.includes('/'))
@@ -53,8 +66,10 @@ export async function readConversation(
   let sessionId: string;
 
   if (specificSessionId) {
-    const encoded = projectPath.replace(/^\//, '-').replace(/\//g, '-');
-    filePath = path.join(CLAUDE_PROJECTS_DIR, encoded, `${specificSessionId}.jsonl`);
+    const encoded = encodeProjectPath(projectPath);
+    const dirPath = findProjectDir(encoded);
+    if (!dirPath) return null;
+    filePath = path.join(dirPath, `${specificSessionId}.jsonl`);
     sessionId = specificSessionId;
     if (!fs.existsSync(filePath)) return null;
   } else {
