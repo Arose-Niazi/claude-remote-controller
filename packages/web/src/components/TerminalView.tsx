@@ -48,6 +48,7 @@ export default function TerminalView({ socket }: TerminalViewProps) {
   const [convMessages, setConvMessages] = useState<ClaudeConvMessage[]>([]);
   const convLineRef = useRef(0);
   const convProjectRef = useRef<string | null>(null);
+  const convClaudeSessionRef = useRef<string | null>(null);
   const ctrlRef = useRef(false);
   const altRef = useRef(false);
   const [downloads, setDownloads] = useState<
@@ -201,23 +202,31 @@ export default function TerminalView({ socket }: TerminalViewProps) {
     }, 50);
   }, [rawMode, resize]);
 
-  // Detect project path from ?cmd= param or restore from localStorage
+  // Detect project path + Claude session ID from ?cmd= param or restore from localStorage
   useEffect(() => {
     if (initialCmd) {
-      const match = initialCmd.match(/cd\s+"?([^"&]+)"?\s*&&/);
-      if (match) convProjectRef.current = match[1];
+      const pathMatch = initialCmd.match(/cd\s+"?([^"&]+)"?\s*&&/);
+      if (pathMatch) convProjectRef.current = pathMatch[1];
+      const resumeMatch = initialCmd.match(/--resume\s+([a-f0-9-]+)/);
+      if (resumeMatch) convClaudeSessionRef.current = resumeMatch[1];
     }
   }, [initialCmd]);
 
-  // Once sessionId is known, save or restore the project path
+  // Once terminal sessionId is known, save or restore conv context
   useEffect(() => {
     if (!sessionId) return;
-    const storageKey = `conv-project-${sessionId}`;
+    const projectKey = `conv-project-${sessionId}`;
+    const claudeKey = `conv-claude-session-${sessionId}`;
     if (convProjectRef.current) {
-      localStorage.setItem(storageKey, convProjectRef.current);
+      localStorage.setItem(projectKey, convProjectRef.current);
+      if (convClaudeSessionRef.current) {
+        localStorage.setItem(claudeKey, convClaudeSessionRef.current);
+      }
     } else {
-      const saved = localStorage.getItem(storageKey);
-      if (saved) convProjectRef.current = saved;
+      const savedProject = localStorage.getItem(projectKey);
+      if (savedProject) convProjectRef.current = savedProject;
+      const savedClaude = localStorage.getItem(claudeKey);
+      if (savedClaude) convClaudeSessionRef.current = savedClaude;
     }
   }, [sessionId]);
 
@@ -229,9 +238,13 @@ export default function TerminalView({ socket }: TerminalViewProps) {
 
     const handleConvData = (payload: ClaudeConvDataPayload) => {
       if (payload.agentId !== agentId) return;
+      // Lock onto the session ID once discovered (for new sessions without --resume)
+      if (payload.sessionId && !convClaudeSessionRef.current) {
+        convClaudeSessionRef.current = payload.sessionId;
+        if (sessionId) localStorage.setItem(`conv-claude-session-${sessionId}`, payload.sessionId);
+      }
       if (payload.messages.length > 0) {
         setConvMessages((prev) => [...prev, ...payload.messages]);
-        // Remove pending sent messages that now appear in JSONL
         setPendingSent((prev) => {
           const newUserMsgs = payload.messages.filter((m) => m.type === 'user');
           if (newUserMsgs.length > 0) return prev.slice(newUserMsgs.length);
@@ -243,14 +256,17 @@ export default function TerminalView({ socket }: TerminalViewProps) {
 
     socket.on(CLAUDE_CONV_DATA, handleConvData);
 
+    const claudeSessionId = convClaudeSessionRef.current || undefined;
+
     // Initial read
-    socket.emit(CLAUDE_CONV_READ, { agentId, projectPath, afterLine: 0 });
+    socket.emit(CLAUDE_CONV_READ, { agentId, projectPath, sessionId: claudeSessionId, afterLine: 0 });
 
     // Poll every 2 seconds
     const interval = setInterval(() => {
       socket.emit(CLAUDE_CONV_READ, {
         agentId,
         projectPath,
+        sessionId: convClaudeSessionRef.current || claudeSessionId,
         afterLine: convLineRef.current,
       });
     }, 2000);
