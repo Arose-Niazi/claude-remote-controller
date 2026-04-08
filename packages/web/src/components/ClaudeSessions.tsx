@@ -30,7 +30,7 @@ function shortModel(model?: string): string {
 }
 
 function projectName(fullPath: string): string {
-  const parts = fullPath.split('/').filter(Boolean);
+  const parts = fullPath.split(/[\\/]/).filter(Boolean);
   return parts.slice(-2).join('/');
 }
 
@@ -58,12 +58,12 @@ export default function ClaudeSessions({ socket, agentId, onClose }: ClaudeSessi
   }, [socket, agentId]);
 
   function handleResume(session: ClaudeSessionInfo) {
-    const cmd = `cd ${JSON.stringify(session.projectPath)} && claude --resume ${session.sessionId}`;
+    const cmd = `cd ${JSON.stringify(session.projectPath)}; claude --resume ${session.sessionId}`;
     navigate(`/terminal/${agentId}/new?cmd=${encodeURIComponent(cmd)}`);
   }
 
   function handleNewClaude(projectPath: string) {
-    const cmd = `cd ${JSON.stringify(projectPath)} && claude`;
+    const cmd = `cd ${JSON.stringify(projectPath)}; claude`;
     navigate(`/terminal/${agentId}/new?cmd=${encodeURIComponent(cmd)}`);
   }
 

@@ -205,7 +205,7 @@ export default function TerminalView({ socket }: TerminalViewProps) {
   // Detect project path + Claude session ID from ?cmd= param or restore from localStorage
   useEffect(() => {
     if (initialCmd) {
-      const pathMatch = initialCmd.match(/cd\s+"?([^"&]+)"?\s*&&/);
+      const pathMatch = initialCmd.match(/cd\s+"?([^";]+)"?\s*;/);
       if (pathMatch) convProjectRef.current = pathMatch[1];
       const resumeMatch = initialCmd.match(/--resume\s+([a-f0-9-]+)/);
       if (resumeMatch) convClaudeSessionRef.current = resumeMatch[1];
@@ -394,7 +394,7 @@ export default function TerminalView({ socket }: TerminalViewProps) {
   }, [composeText, write]);
 
   return (
-    <div className="flex flex-col h-[calc(100vh-52px)]">
+    <div className="flex flex-col h-[calc(100dvh-52px)]">
       <input
         ref={fileInputRef}
         type="file"

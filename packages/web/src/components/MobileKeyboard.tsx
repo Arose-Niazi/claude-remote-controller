@@ -49,15 +49,15 @@ export default function MobileKeyboard({
       {keys.map((k) => (
         <button
           key={k.label}
-          onPointerDown={(e) => {
-            e.preventDefault();
+          onPointerDown={(e) => e.preventDefault()}
+          onClick={() => {
             if (k.charCode !== undefined) {
               onKey(String.fromCharCode(k.charCode));
             } else if (k.action) {
               k.action();
             }
           }}
-          className={`flex-1 py-2 text-xs font-medium rounded-lg transition-colors select-none ${
+          className={`flex-1 py-2 text-xs font-medium rounded-lg transition-colors select-none touch-manipulation ${
             k.toggle && k.active
               ? 'bg-claude text-white'
               : 'bg-surface-raised hover:bg-surface-overlay text-text-secondary'
