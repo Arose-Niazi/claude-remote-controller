@@ -206,7 +206,7 @@ export default function TerminalView({ socket }: TerminalViewProps) {
   useEffect(() => {
     if (initialCmd) {
       const pathMatch = initialCmd.match(/cd\s+"?([^";]+)"?\s*;/);
-      if (pathMatch) convProjectRef.current = pathMatch[1];
+      if (pathMatch) convProjectRef.current = pathMatch[1].replace(/\\\\/g, '\\');
       const resumeMatch = initialCmd.match(/--resume\s+([a-f0-9-]+)/);
       if (resumeMatch) convClaudeSessionRef.current = resumeMatch[1];
     }
