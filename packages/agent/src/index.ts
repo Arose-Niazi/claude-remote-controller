@@ -175,8 +175,8 @@ socket.on(FILES_DOWNLOAD, async (payload: FilesDownloadPayload) => {
   });
 });
 
-// --- VPN handlers ---
-const vpnProfiles = config.vpn?.profiles || [];
+// --- VPN handlers (disabled on Windows — requires admin) ---
+const vpnProfiles = process.platform === 'win32' ? [] : (config.vpn?.profiles || []);
 
 socket.on(VPN_LIST, async () => {
   const profiles = await getProfiles(vpnProfiles);
