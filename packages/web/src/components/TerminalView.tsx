@@ -378,7 +378,12 @@ export default function TerminalView({ socket }: TerminalViewProps) {
     if (convProjectRef.current) {
       setPendingSent((prev) => [...prev, composeText]);
     }
-    write(composeText + '\r');
+    if (composeText.includes('\n')) {
+      // Wrap in bracketed paste so terminal treats multi-line text as single input
+      write('\x1b[200~' + composeText + '\x1b[201~\r');
+    } else {
+      write(composeText + '\r');
+    }
     setComposeText('');
     composeRef.current?.focus();
   }, [composeText, write]);
@@ -388,7 +393,11 @@ export default function TerminalView({ socket }: TerminalViewProps) {
     if (convProjectRef.current) {
       setPendingSent((prev) => [...prev, composeText]);
     }
-    write(composeText);
+    if (composeText.includes('\n')) {
+      write('\x1b[200~' + composeText + '\x1b[201~');
+    } else {
+      write(composeText);
+    }
     setComposeText('');
     composeRef.current?.focus();
   }, [composeText, write]);
