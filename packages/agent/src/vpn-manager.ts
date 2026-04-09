@@ -135,9 +135,11 @@ async function connectWireGuard(profile: VpnProfileConfig): Promise<string | nul
     if (!fs.existsSync(confPath)) {
       return `Config file not found: ${confPath}`;
     }
-    // Install tunnel service if not exists, then start
+    // Install tunnel service (triggers UAC if needed) then start
     await runCmd(`& 'C:\\Program Files\\WireGuard\\wireguard.exe' /installtunnelservice '${confPath}'`);
-    await new Promise((r) => setTimeout(r, 1000));
+    await new Promise((r) => setTimeout(r, 2000));
+    // Set to Manual start so it doesn't auto-start on boot
+    await runCmd(`Set-Service -Name 'WireGuardTunnel$${tunnelName}' -StartupType Manual -ErrorAction SilentlyContinue`);
     const { stderr } = await runCmd(`Start-Service -Name 'WireGuardTunnel$${tunnelName}' -ErrorAction Stop 2>&1`);
     if (stderr && !stderr.includes('running')) return stderr.trim();
     return null;
@@ -232,8 +234,18 @@ async function disconnectAzure(profile: VpnProfileConfig): Promise<string | null
 async function disconnectWireGuard(profile: VpnProfileConfig): Promise<string | null> {
   const tunnelName = profile.tunnelName || profile.id;
   if (isWindows) {
-    const { stderr } = await runCmd(`Stop-Service -Name 'WireGuardTunnel$${tunnelName}' -Force -ErrorAction Stop 2>&1`);
-    if (stderr && !stderr.includes('running') && !stderr.includes('stopped')) return stderr.trim();
+    // Use WireGuard CLI to uninstall the tunnel service (stops + removes it)
+    // This avoids the admin permission issue with Stop-Service
+    const { stdout, stderr } = await runCmd(
+      `& 'C:\\Program Files\\WireGuard\\wireguard.exe' /uninstalltunnelservice '${tunnelName}' 2>&1`
+    );
+    const output = stdout + stderr;
+    await new Promise((r) => setTimeout(r, 2000));
+    // Verify it's actually stopped
+    const status = await getWireGuardStatus(profile);
+    if (status === 'connected') {
+      return output.trim() || 'Failed to disconnect — may need to disconnect from WireGuard GUI';
+    }
     return null;
   }
   // macOS: use scutil --nc if serviceName is configured
