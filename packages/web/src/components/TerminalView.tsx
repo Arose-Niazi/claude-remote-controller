@@ -536,7 +536,7 @@ export default function TerminalView({ socket }: TerminalViewProps) {
         {/* Chat view — visible in compose mode when we have a conversation */}
         {!rawMode && convProjectRef.current && (
           <div className="absolute inset-0 flex flex-col bg-surface-deep z-[3]">
-            <ChatView messages={convMessages} pendingSent={pendingSent} />
+            <ChatView messages={convMessages} pendingSent={pendingSent} onQuickAction={write} />
           </div>
         )}
 
