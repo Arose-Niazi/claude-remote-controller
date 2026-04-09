@@ -243,32 +243,83 @@ export default function ChatView({ messages, pendingSent = [], onQuickAction }: 
         return null;
       })}
 
-      {/* Permission prompt banner — shows when Claude is waiting for tool approval */}
-      {onQuickAction && pendingSent.length === 0 && messages.length > 0 && messages[messages.length - 1].type === 'tool_use' && (
-        <div className="mx-1 my-2 bg-yellow-500/10 border border-yellow-500/30 rounded-xl px-3 py-2.5">
-          <div className="text-xs text-yellow-400 font-medium mb-2">Claude needs permission to proceed</div>
-          <div className="flex gap-2">
-            <button
-              onClick={() => onQuickAction('y\r')}
-              className="flex-1 py-2 text-xs font-medium bg-green-500/20 hover:bg-green-500/30 text-green-400 border border-green-500/30 rounded-lg transition-colors"
-            >
-              Allow (y)
-            </button>
-            <button
-              onClick={() => onQuickAction('n\r')}
-              className="flex-1 py-2 text-xs font-medium bg-red-500/20 hover:bg-red-500/30 text-red-400 border border-red-500/30 rounded-lg transition-colors"
-            >
-              Deny (n)
-            </button>
-            <button
-              onClick={() => onQuickAction('a\r')}
-              className="flex-1 py-2 text-xs font-medium bg-blue-500/20 hover:bg-blue-500/30 text-blue-400 border border-blue-500/30 rounded-lg transition-colors"
-            >
-              Always (a)
-            </button>
+      {/* Waiting for input banner — shows when Claude needs a response */}
+      {onQuickAction && pendingSent.length === 0 && messages.length > 0 && (() => {
+        const last = messages[messages.length - 1];
+        const lastTwo = messages.length >= 2 ? messages[messages.length - 2] : null;
+        const isToolWaiting = last.type === 'tool_use';
+        const isAssistantWaiting = last.type === 'assistant' && (
+          // Claude asked a question or presented options
+          /\?\s*$/.test(last.content.trim()) ||
+          /\(y\/n\)/i.test(last.content) ||
+          /\[y\/n/i.test(last.content) ||
+          /plan|proceed|confirm|approve|select|choose|option/i.test(last.content.slice(-200))
+        );
+        // Also detect: assistant message followed by tool_use that's waiting
+        const isAskingAfterTool = last.type === 'assistant' && lastTwo?.type === 'tool_use';
+
+        if (!isToolWaiting && !isAssistantWaiting && !isAskingAfterTool) return null;
+
+        return (
+          <div className="mx-1 my-2 bg-yellow-500/10 border border-yellow-500/30 rounded-xl px-3 py-2.5">
+            <div className="text-xs text-yellow-400 font-medium mb-2">
+              {isToolWaiting ? 'Claude needs permission to proceed' : 'Claude is waiting for your response'}
+            </div>
+            <div className="flex gap-2 flex-wrap">
+              {isToolWaiting && (
+                <>
+                  <button
+                    onClick={() => onQuickAction('y\r')}
+                    className="flex-1 py-2 text-xs font-medium bg-green-500/20 hover:bg-green-500/30 text-green-400 border border-green-500/30 rounded-lg transition-colors"
+                  >
+                    Allow (y)
+                  </button>
+                  <button
+                    onClick={() => onQuickAction('n\r')}
+                    className="flex-1 py-2 text-xs font-medium bg-red-500/20 hover:bg-red-500/30 text-red-400 border border-red-500/30 rounded-lg transition-colors"
+                  >
+                    Deny (n)
+                  </button>
+                  <button
+                    onClick={() => onQuickAction('a\r')}
+                    className="flex-1 py-2 text-xs font-medium bg-blue-500/20 hover:bg-blue-500/30 text-blue-400 border border-blue-500/30 rounded-lg transition-colors"
+                  >
+                    Always (a)
+                  </button>
+                </>
+              )}
+              {!isToolWaiting && (
+                <>
+                  <button
+                    onClick={() => onQuickAction('y\r')}
+                    className="flex-1 py-2 text-xs font-medium bg-green-500/20 hover:bg-green-500/30 text-green-400 border border-green-500/30 rounded-lg transition-colors"
+                  >
+                    Yes
+                  </button>
+                  <button
+                    onClick={() => onQuickAction('n\r')}
+                    className="flex-1 py-2 text-xs font-medium bg-red-500/20 hover:bg-red-500/30 text-red-400 border border-red-500/30 rounded-lg transition-colors"
+                  >
+                    No
+                  </button>
+                  <button
+                    onClick={() => onQuickAction('\r')}
+                    className="flex-1 py-2 text-xs font-medium bg-surface-raised hover:bg-surface-overlay text-text-secondary border border-border rounded-lg transition-colors"
+                  >
+                    Enter
+                  </button>
+                  <button
+                    onClick={() => onQuickAction('\x1b')}
+                    className="flex-1 py-2 text-xs font-medium bg-surface-raised hover:bg-surface-overlay text-text-secondary border border-border rounded-lg transition-colors"
+                  >
+                    Esc
+                  </button>
+                </>
+              )}
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Pending sent messages (not yet in JSONL) */}
       {pendingSent.map((text, i) => (
