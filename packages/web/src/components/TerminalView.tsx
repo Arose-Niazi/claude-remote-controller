@@ -85,6 +85,13 @@ export default function TerminalView({ socket }: TerminalViewProps) {
     },
   });
 
+  // Clear stale pending messages after 30 seconds
+  useEffect(() => {
+    if (pendingSent.length === 0) return;
+    const timer = setTimeout(() => setPendingSent([]), 30000);
+    return () => clearTimeout(timer);
+  }, [pendingSent]);
+
   // Keep refs in sync
   useEffect(() => { ctrlRef.current = ctrlActive; }, [ctrlActive]);
   useEffect(() => { altRef.current = altActive; }, [altActive]);
@@ -246,8 +253,11 @@ export default function TerminalView({ socket }: TerminalViewProps) {
       if (payload.messages.length > 0) {
         setConvMessages((prev) => [...prev, ...payload.messages]);
         setPendingSent((prev) => {
+          if (prev.length === 0) return prev;
           const newUserMsgs = payload.messages.filter((m) => m.type === 'user');
           if (newUserMsgs.length > 0) return prev.slice(newUserMsgs.length);
+          // Assistant responding means prior user input was received
+          if (payload.messages.some((m) => m.type === 'assistant')) return [];
           return prev;
         });
       }
