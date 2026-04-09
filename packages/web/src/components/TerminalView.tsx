@@ -410,32 +410,58 @@ export default function TerminalView({ socket }: TerminalViewProps) {
     if (convProjectRef.current) {
       setPendingSent((prev) => [...prev, composeText]);
     }
-    if (composeText.includes('\n')) {
-      // Bracketed paste with \r for line breaks (terminals use \r, not \n)
-      // Chunked to avoid PTY buffer overflow on large messages
-      const payload = '\x1b[200~' + composeText.replace(/\n/g, '\r') + '\x1b[201~';
-      writeChunked(payload, () => setTimeout(() => write('\r'), 10));
+    // Send line by line to avoid PTY buffer overflow
+    // Each line is typed, then \n to add newline, final \r to submit
+    const lines = composeText.split('\n');
+    if (lines.length > 1) {
+      let i = 0;
+      const sendLine = () => {
+        write(lines[i]);
+        i++;
+        if (i < lines.length) {
+          // Newline between lines (not submit)
+          setTimeout(() => {
+            write('\n');
+            setTimeout(sendLine, 30);
+          }, 10);
+        } else {
+          // Submit
+          setTimeout(() => write('\r'), 30);
+        }
+      };
+      sendLine();
     } else {
       write(composeText + '\r');
     }
     setComposeText('');
     composeRef.current?.focus();
-  }, [composeText, write, writeChunked]);
+  }, [composeText, write]);
 
   const handleComposeRaw = useCallback(() => {
     if (!composeText) return;
     if (convProjectRef.current) {
       setPendingSent((prev) => [...prev, composeText]);
     }
-    if (composeText.includes('\n')) {
-      const payload = '\x1b[200~' + composeText.replace(/\n/g, '\r') + '\x1b[201~';
-      writeChunked(payload);
+    const lines = composeText.split('\n');
+    if (lines.length > 1) {
+      let i = 0;
+      const sendLine = () => {
+        write(lines[i]);
+        i++;
+        if (i < lines.length) {
+          setTimeout(() => {
+            write('\n');
+            setTimeout(sendLine, 30);
+          }, 10);
+        }
+      };
+      sendLine();
     } else {
       write(composeText);
     }
     setComposeText('');
     composeRef.current?.focus();
-  }, [composeText, write, writeChunked]);
+  }, [composeText, write]);
 
   return (
     <div className="flex flex-col h-[calc(100dvh-52px)]">
