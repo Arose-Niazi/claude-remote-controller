@@ -114,28 +114,42 @@ function validateSignedToken(token: string): { fileId: string; expiresAt: number
   }
 }
 
-export function cleanupExpired(): void {
+export function cleanupExpired(): { removed: number; kept: number } {
+  let removed = 0;
+  let kept = 0;
   for (const baseDir of [uploadsDir(), receivesDir()]) {
     if (!fs.existsSync(baseDir)) continue;
     for (const fileId of fs.readdirSync(baseDir)) {
-      const metaPath = path.join(baseDir, fileId, 'meta.json');
+      const dir = path.join(baseDir, fileId);
+      const metaPath = path.join(dir, 'meta.json');
       if (!fs.existsSync(metaPath)) {
-        fs.rmSync(path.join(baseDir, fileId), { recursive: true, force: true });
+        fs.rmSync(dir, { recursive: true, force: true });
+        removed++;
         continue;
       }
       try {
         const meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
         if (meta.expiresAt < Date.now()) {
-          fs.rmSync(path.join(baseDir, fileId), { recursive: true, force: true });
-          logger.debug({ fileId }, 'Cleaned up expired file');
+          fs.rmSync(dir, { recursive: true, force: true });
+          removed++;
+        } else {
+          kept++;
         }
       } catch {
-        fs.rmSync(path.join(baseDir, fileId), { recursive: true, force: true });
+        fs.rmSync(dir, { recursive: true, force: true });
+        removed++;
       }
     }
   }
+  if (removed > 0 || kept > 0) {
+    logger.info({ removed, kept, intervalMs: FILE_CLEANUP_INTERVAL }, 'File cleanup cycle');
+  }
+  return { removed, kept };
 }
 
 export function startCleanupInterval(): void {
+  // Run once at startup so expired files from a previous session don't sit
+  // around for up to FILE_CLEANUP_INTERVAL after a restart.
+  cleanupExpired();
   setInterval(cleanupExpired, FILE_CLEANUP_INTERVAL);
 }

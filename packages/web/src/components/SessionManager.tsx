@@ -117,7 +117,6 @@ export default function SessionManager({ socket }: SessionManagerProps) {
               agentId={agentId}
               initialPath={browseInitialPath}
               onClose={() => setShowBrowse(false)}
-              onDownloadReady={() => {}}
               onStartClaude={(path, hasClaudeSettings) => {
                 if (hasClaudeSettings) {
                   setShowBrowse(false);

@@ -4,18 +4,16 @@ import {
   FILES_LIST,
   FILES_LIST_RESULT,
   FILES_DOWNLOAD,
-  FILES_DOWNLOAD_READY,
   AGENT_EXEC,
   AGENT_EXEC_RESULT,
 } from '@crc/shared';
-import type { FileEntry, FilesListResultPayload, FilesDownloadReadyPayload, AgentExecResultPayload } from '@crc/shared';
+import type { FileEntry, FilesListResultPayload, AgentExecResultPayload } from '@crc/shared';
 
 interface FileExplorerProps {
   socket: Socket | null;
   agentId: string;
   initialPath: string;
   onClose: () => void;
-  onDownloadReady: (info: { fileName: string; downloadUrl: string; size: number }) => void;
   onStartClaude?: (path: string, hasClaudeSettings: boolean) => void;
 }
 
@@ -32,7 +30,6 @@ export default function FileExplorer({
   agentId,
   initialPath,
   onClose,
-  onDownloadReady,
   onStartClaude,
 }: FileExplorerProps) {
   const [currentPath, setCurrentPath] = useState(initialPath);
@@ -109,21 +106,11 @@ export default function FileExplorer({
       }
     };
 
-    const handleDownloadReady = (payload: FilesDownloadReadyPayload) => {
-      onDownloadReady({
-        fileName: payload.fileName,
-        downloadUrl: payload.downloadUrl,
-        size: payload.size,
-      });
-    };
-
     socket.on(FILES_LIST_RESULT, handleResult);
-    socket.on(FILES_DOWNLOAD_READY, handleDownloadReady);
     return () => {
       socket.off(FILES_LIST_RESULT, handleResult);
-      socket.off(FILES_DOWNLOAD_READY, handleDownloadReady);
     };
-  }, [socket, onDownloadReady]);
+  }, [socket]);
 
   const navigateTo = (name: string) => {
     setHasNavigated(true);

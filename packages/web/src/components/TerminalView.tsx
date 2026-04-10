@@ -5,8 +5,18 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebglAddon } from '@xterm/addon-webgl';
 import '@xterm/xterm/css/xterm.css';
-import { TERMINAL_OUTPUT, CLAUDE_CONV_READ, CLAUDE_CONV_DATA } from '@crc/shared';
-import type { ClaudeConvMessage, ClaudeConvDataPayload } from '@crc/shared';
+import {
+  TERMINAL_OUTPUT,
+  CLAUDE_CONV_READ,
+  CLAUDE_CONV_DATA,
+  FILES_DOWNLOAD,
+  FILES_DOWNLOAD_READY,
+} from '@crc/shared';
+import type {
+  ClaudeConvMessage,
+  ClaudeConvDataPayload,
+  FilesDownloadReadyPayload,
+} from '@crc/shared';
 import { useTerminal } from '../hooks/useTerminal';
 import { useAuthStore } from '../stores/authStore';
 import { useAgentStore } from '../stores/agentStore';
@@ -14,6 +24,13 @@ import MobileKeyboard from './MobileKeyboard';
 import FileExplorer from './FileExplorer';
 import FileNotifications from './FileNotifications';
 import ChatView from './ChatView';
+import {
+  detectClaudePrompt,
+  promptsEqual,
+  buildPromptSelectionKeys,
+  type DetectedPrompt,
+} from '../lib/detectPrompt';
+import { resolveFilePath } from '../lib/parseFilePaths';
 
 interface TerminalViewProps {
   socket: Socket | null;
@@ -58,8 +75,31 @@ export default function TerminalView({ socket }: TerminalViewProps) {
   const agents = useAgentStore((s) => s.agents);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Live Claude Code prompt detection from the xterm buffer
+  const [terminalPrompt, setTerminalPrompt] = useState<DetectedPrompt | null>(null);
+  const terminalPromptRef = useRef<DetectedPrompt | null>(null);
+  const promptCheckTimerRef = useRef<number | null>(null);
+  const [ttyScrolledUp, setTtyScrolledUp] = useState(false);
+
   const agent = agents.find((a) => a.id === agentId);
   const initialPath = agent?.homeDirectory || agent?.rootPaths?.[0] || '/';
+
+  const schedulePromptCheck = useCallback(() => {
+    if (promptCheckTimerRef.current !== null) return;
+    promptCheckTimerRef.current = window.setTimeout(() => {
+      promptCheckTimerRef.current = null;
+      const term = termRef.current;
+      if (!term) return;
+      const detected = detectClaudePrompt(term);
+      if (!promptsEqual(detected, terminalPromptRef.current)) {
+        terminalPromptRef.current = detected;
+        setTerminalPrompt(detected);
+      }
+      // Keep the scrolled-up indicator fresh on new output too
+      const buf = term.buffer.active;
+      setTtyScrolledUp(buf.viewportY < buf.baseY);
+    }, 80);
+  }, []);
 
   const {
     sessionId,
@@ -77,7 +117,7 @@ export default function TerminalView({ socket }: TerminalViewProps) {
       termRef.current?.write('\r\n\x1b[33m[Session ended]\x1b[0m\r\n');
     },
     onBuffer: (data) => {
-      termRef.current?.write(data);
+      termRef.current?.write(data, () => schedulePromptCheck());
     },
     onDetached: (reason) => {
       termRef.current?.write(`\r\n\x1b[33m[Detached: ${reason}]\x1b[0m\r\n`);
@@ -178,8 +218,18 @@ export default function TerminalView({ socket }: TerminalViewProps) {
     window.addEventListener('resize', onResize);
     window.addEventListener('orientationchange', () => setTimeout(onResize, 100));
 
+    const scrollDisposable = term.onScroll(() => {
+      const buf = term.buffer.active;
+      setTtyScrolledUp(buf.viewportY < buf.baseY);
+    });
+
     return () => {
       window.removeEventListener('resize', onResize);
+      scrollDisposable.dispose();
+      if (promptCheckTimerRef.current !== null) {
+        window.clearTimeout(promptCheckTimerRef.current);
+        promptCheckTimerRef.current = null;
+      }
       term.dispose();
       termRef.current = null;
       fitAddonRef.current = null;
@@ -293,7 +343,7 @@ export default function TerminalView({ socket }: TerminalViewProps) {
 
     const handleOutput = (payload: { sessionId: string; data: string }) => {
       if (payload.sessionId === sessionId) {
-        termRef.current?.write(payload.data);
+        termRef.current?.write(payload.data, () => schedulePromptCheck());
       }
     };
 
@@ -301,7 +351,7 @@ export default function TerminalView({ socket }: TerminalViewProps) {
     return () => {
       socket.off(TERMINAL_OUTPUT, handleOutput);
     };
-  }, [socket, sessionId]);
+  }, [socket, sessionId, schedulePromptCheck]);
 
   // Auto-write initial command from ?cmd= param
   useEffect(() => {
@@ -379,8 +429,52 @@ export default function TerminalView({ socket }: TerminalViewProps) {
     []
   );
 
+  // Single top-level listener for FILES_DOWNLOAD_READY — covers downloads
+  // triggered from FileExplorer AND from chat file-link clicks, even when the
+  // explorer is closed.
+  useEffect(() => {
+    if (!socket) return;
+    const onReady = (payload: FilesDownloadReadyPayload) => {
+      handleDownloadReady({
+        fileName: payload.fileName,
+        downloadUrl: payload.downloadUrl,
+        size: payload.size,
+      });
+    };
+    socket.on(FILES_DOWNLOAD_READY, onReady);
+    return () => { socket.off(FILES_DOWNLOAD_READY, onReady); };
+  }, [socket, handleDownloadReady]);
+
   const dismissDownload = useCallback((id: number) => {
     setDownloads((prev) => prev.filter((d) => d.id !== id));
+  }, []);
+
+  const handleChatFileDownload = useCallback(
+    (rawPath: string) => {
+      if (!socket) return;
+      const resolved = resolveFilePath(rawPath, convProjectRef.current);
+      socket.emit(FILES_DOWNLOAD, { agentId, path: resolved });
+    },
+    [socket, agentId]
+  );
+
+  const handlePromptAction = useCallback(
+    (optionNumber: number) => {
+      const prompt = terminalPromptRef.current;
+      if (!prompt) return;
+      const keys = buildPromptSelectionKeys(prompt, optionNumber);
+      write(keys);
+      // Optimistically clear; the next detection run will refresh it if the
+      // prompt is still showing for any reason.
+      terminalPromptRef.current = null;
+      setTerminalPrompt(null);
+    },
+    [write]
+  );
+
+  const scrollTtyToBottom = useCallback(() => {
+    termRef.current?.scrollToBottom();
+    setTtyScrolledUp(false);
   }, []);
 
   // Send data in small chunks with delays to avoid PTY buffer overflow
@@ -533,10 +627,57 @@ export default function TerminalView({ socket }: TerminalViewProps) {
           className={`absolute inset-0 pl-1 ${!rawMode && convProjectRef.current ? 'invisible' : ''}`}
         />
 
+        {/* TTY overlay: prompt banner + scroll-to-bottom button, only when xterm is visible */}
+        {(rawMode || !convProjectRef.current) && (
+          <>
+            {terminalPrompt && (
+              <div className="absolute left-2 right-2 bottom-2 z-[6] bg-surface-deep/95 backdrop-blur border border-yellow-500/40 rounded-xl p-2.5 shadow-xl">
+                <div className="text-xs text-yellow-400 font-medium mb-2 break-words">
+                  {terminalPrompt.question}
+                </div>
+                <div className="flex flex-col gap-1.5 max-h-56 overflow-y-auto">
+                  {terminalPrompt.options.map((opt) => (
+                    <button
+                      key={opt.number}
+                      onClick={() => handlePromptAction(opt.number)}
+                      className={`w-full text-left px-3 py-1.5 text-xs rounded-lg border transition-colors ${
+                        opt.selected
+                          ? 'bg-yellow-500/20 border-yellow-500/40 text-yellow-300'
+                          : 'bg-surface-raised border-border-subtle text-text-secondary hover:bg-surface-overlay'
+                      }`}
+                    >
+                      <span className="font-mono text-text-muted mr-2">{opt.number}.</span>
+                      {opt.text}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {ttyScrolledUp && (
+              <button
+                type="button"
+                onClick={scrollTtyToBottom}
+                className="absolute bottom-3 right-3 z-[7] w-10 h-10 rounded-full bg-surface-overlay/95 backdrop-blur border border-border text-text-secondary hover:text-accent hover:border-accent shadow-lg flex items-center justify-center transition-colors"
+                title="Scroll to bottom"
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="6 9 12 15 18 9" />
+                </svg>
+              </button>
+            )}
+          </>
+        )}
+
         {/* Chat view — visible in compose mode when we have a conversation */}
         {!rawMode && convProjectRef.current && (
           <div className="absolute inset-0 flex flex-col bg-surface-deep z-[3]">
-            <ChatView messages={convMessages} pendingSent={pendingSent} onQuickAction={write} />
+            <ChatView
+              messages={convMessages}
+              pendingSent={pendingSent}
+              terminalPrompt={terminalPrompt}
+              onPromptAction={handlePromptAction}
+              onFileDownload={handleChatFileDownload}
+            />
           </div>
         )}
 
@@ -556,7 +697,6 @@ export default function TerminalView({ socket }: TerminalViewProps) {
               agentId={agentId || ''}
               initialPath={initialPath}
               onClose={() => setShowFiles(false)}
-              onDownloadReady={handleDownloadReady}
             />
           </div>
         )}

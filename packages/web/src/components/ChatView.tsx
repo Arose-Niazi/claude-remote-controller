@@ -1,5 +1,7 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState, Fragment } from 'react';
 import type { ClaudeConvMessage } from '@crc/shared';
+import type { DetectedPrompt } from '../lib/detectPrompt';
+import { parseFilePathsInText } from '../lib/parseFilePaths';
 
 function escapeHtml(str: string): string {
   return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -22,8 +24,34 @@ function parseTableRow(line: string): string[] {
 function inlineMarkdown(text: string): string {
   let s = escapeHtml(text);
   s = s.replace(/\*\*(.+?)\*\*/g, '<strong class="font-semibold text-text">$1</strong>');
-  s = s.replace(/`([^`]+)`/g, '<code class="bg-surface-deep px-1 py-0.5 rounded text-accent text-xs font-mono">$1</code>');
+  s = s.replace(/`([^`]+)`/g, (_, code: string) => {
+    // If the backticked content looks like a file path, turn it into a download button.
+    const fragments = parseFilePathsInText(code);
+    if (fragments.some((f) => f.type === 'path')) {
+      return fragments
+        .map((f) =>
+          f.type === 'path'
+            ? `<button type="button" class="chat-file-link bg-surface-deep px-1 py-0.5 rounded text-accent text-xs font-mono underline decoration-dotted hover:bg-accent/20 hover:text-accent-hover transition-colors" data-file-path="${escapeHtml(f.value)}">${escapeHtml(f.value)}</button>`
+            : `<code class="bg-surface-deep px-1 py-0.5 rounded text-accent text-xs font-mono">${escapeHtml(f.value)}</code>`
+        )
+        .join('');
+    }
+    return `<code class="bg-surface-deep px-1 py-0.5 rounded text-accent text-xs font-mono">${escapeHtml(code)}</code>`;
+  });
   return s;
+}
+
+function renderTextWithPaths(text: string): string {
+  // For plain text (not inside code blocks), emit file paths as download buttons
+  // and pass everything else through HTML-escaped.
+  const fragments = parseFilePathsInText(text);
+  return fragments
+    .map((f) =>
+      f.type === 'path'
+        ? `<button type="button" class="chat-file-link text-accent underline decoration-dotted hover:text-accent-hover transition-colors font-mono text-[11px]" data-file-path="${escapeHtml(f.value)}">${escapeHtml(f.value)}</button>`
+        : escapeHtml(f.value)
+    )
+    .join('');
 }
 
 function renderTable(tableLines: string[]): string {
@@ -100,9 +128,12 @@ function renderMarkdown(text: string): string {
     }
     flushTable();
 
-    let p = escapeHtml(line);
-    p = p.replace(/\*\*(.+?)\*\*/g, '<strong class="font-semibold text-text">$1</strong>');
-    p = p.replace(/`([^`]+)`/g, '<code class="bg-surface-deep px-1 py-0.5 rounded text-accent text-xs font-mono">$1</code>');
+    // Render inline: bold + backticked code (with file-link detection inside),
+    // and then walk the plain-text segments outside of tags for standalone
+    // file paths.
+    let p = inlineMarkdown(line);
+    // Replace plain-text file paths in the segments that are NOT inside tags.
+    p = replaceOutsideTags(p, renderTextWithPaths);
 
     const heading = line.match(/^(#{1,3})\s+(.+)/);
     if (heading) {
@@ -129,6 +160,51 @@ function renderMarkdown(text: string): string {
   return result.join('');
 }
 
+/**
+ * Apply `transform` to plain-text segments of an HTML string, leaving the
+ * contents of tags (and already-escaped entities within tags) untouched. Used
+ * to inject file-path download buttons into the prose without disturbing the
+ * already-rendered inline markdown (code, bold, etc.).
+ */
+function replaceOutsideTags(html: string, transform: (text: string) => string): string {
+  const parts: string[] = [];
+  let i = 0;
+  while (i < html.length) {
+    if (html[i] === '<') {
+      const end = html.indexOf('>', i);
+      if (end === -1) {
+        parts.push(html.slice(i));
+        break;
+      }
+      // For buttons/code elements, pass through the tag and its inner content
+      // untouched. For simple inline tags like <strong>, we can still safely
+      // pass them through: we just skip from '<' to the matching '>' and emit.
+      parts.push(html.slice(i, end + 1));
+      i = end + 1;
+    } else {
+      const next = html.indexOf('<', i);
+      const text = next === -1 ? html.slice(i) : html.slice(i, next);
+      parts.push(transform(unescapeForRetransform(text)));
+      i = next === -1 ? html.length : next;
+    }
+  }
+  return parts.join('');
+}
+
+/**
+ * Our outer pipeline HTML-escapes text before we reach here, so for the plain
+ * text segments we need to unescape before re-parsing as paths (otherwise `/`
+ * is fine but `&amp;` would reach the path parser). The transform function
+ * then re-escapes any leftover text.
+ */
+function unescapeForRetransform(s: string): string {
+  return s
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"');
+}
+
 function formatTime(ts?: string): string {
   if (!ts) return '';
   const d = new Date(ts);
@@ -138,17 +214,37 @@ function formatTime(ts?: string): string {
 interface ChatViewProps {
   messages: ClaudeConvMessage[];
   pendingSent?: string[];
-  onQuickAction?: (key: string) => void;
+  terminalPrompt?: DetectedPrompt | null;
+  onPromptAction?: (optionNumber: number) => void;
+  onFileDownload?: (rawPath: string) => void;
 }
 
-export default function ChatView({ messages, pendingSent = [], onQuickAction }: ChatViewProps) {
+export default function ChatView({
+  messages,
+  pendingSent = [],
+  terminalPrompt,
+  onPromptAction,
+  onFileDownload,
+}: ChatViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const autoScroll = useRef(true);
+  const [scrolledUp, setScrolledUp] = useState(false);
 
   const handleScroll = () => {
     const el = containerRef.current;
     if (!el) return;
-    autoScroll.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const atBottom = distanceFromBottom < 80;
+    autoScroll.current = atBottom;
+    setScrolledUp(!atBottom);
+  };
+
+  const scrollToBottom = () => {
+    const el = containerRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+    autoScroll.current = true;
+    setScrolledUp(false);
   };
 
   useEffect(() => {
@@ -156,7 +252,22 @@ export default function ChatView({ messages, pendingSent = [], onQuickAction }: 
       const el = containerRef.current;
       if (el) el.scrollTop = el.scrollHeight;
     }
-  }, [messages, pendingSent]);
+  }, [messages, pendingSent, terminalPrompt]);
+
+  // Click delegation for file-path download buttons.
+  const handleContainerClick = (e: React.MouseEvent) => {
+    if (!onFileDownload) return;
+    let target: HTMLElement | null = e.target as HTMLElement;
+    while (target && target !== e.currentTarget) {
+      if (target.dataset && target.dataset.filePath) {
+        e.preventDefault();
+        e.stopPropagation();
+        onFileDownload(target.dataset.filePath);
+        return;
+      }
+      target = target.parentElement;
+    }
+  };
 
   if (messages.length === 0 && pendingSent.length === 0) {
     return (
@@ -171,167 +282,173 @@ export default function ChatView({ messages, pendingSent = [], onQuickAction }: 
   }
 
   return (
-    <div
-      ref={containerRef}
-      onScroll={handleScroll}
-      className="flex-1 overflow-y-auto px-3 py-3 space-y-2"
-    >
-      {messages.map((msg, i) => {
-        if (msg.type === 'user') {
-          return (
-            <div key={`u-${i}`} className="flex justify-end">
-              <div className="max-w-[85%]">
-                <div className="bg-accent/15 border border-accent/20 rounded-2xl rounded-br-md px-3 py-2">
-                  <pre className="text-xs text-text whitespace-pre-wrap font-mono break-words leading-relaxed">{msg.content}</pre>
-                </div>
-                <div className="text-[10px] text-text-muted text-right mt-0.5 mr-1">
-                  {formatTime(msg.timestamp)}
-                </div>
-              </div>
-            </div>
-          );
-        }
-
-        if (msg.type === 'assistant') {
-          const html = renderMarkdown(msg.content);
-          return (
-            <div key={`a-${i}`} className="flex justify-start">
-              <div className="w-full">
-                <div
-                  className="bg-surface-raised border border-border rounded-2xl rounded-bl-md px-3 py-2 text-xs leading-relaxed text-text-secondary break-words"
-                  dangerouslySetInnerHTML={{ __html: html }}
-                />
-                <div className="text-[10px] text-text-muted mt-0.5 ml-1">
-                  {msg.model && <span className="mr-2">{msg.model.includes('opus') ? 'Opus' : msg.model.includes('sonnet') ? 'Sonnet' : ''}</span>}
-                  {formatTime(msg.timestamp)}
-                </div>
-              </div>
-            </div>
-          );
-        }
-
-        if (msg.type === 'tool_use') {
-          return (
-            <div key={`t-${i}`} className="flex justify-start">
-              <div className="max-w-[90%]">
-                <div className="bg-claude/10 border border-claude/20 rounded-xl px-3 py-1.5 flex items-start gap-2">
-                  <span className="text-claude text-xs flex-shrink-0 mt-0.5">&#9673;</span>
-                  <div className="min-w-0">
-                    <span className="text-xs font-medium text-claude">{msg.toolName}</span>
-                    {msg.content && (
-                      <pre className="text-[10px] text-text-muted font-mono mt-0.5 whitespace-pre-wrap break-all leading-relaxed">{msg.content.length > 200 ? msg.content.slice(0, 200) + '...' : msg.content}</pre>
-                    )}
+    <div className="flex-1 relative overflow-hidden">
+      <div
+        ref={containerRef}
+        onScroll={handleScroll}
+        onClick={handleContainerClick}
+        className="absolute inset-0 overflow-y-auto px-3 py-3 space-y-2"
+      >
+        {messages.map((msg, i) => {
+          if (msg.type === 'user') {
+            return (
+              <div key={`u-${i}`} className="flex justify-end">
+                <div className="max-w-[85%]">
+                  <div className="bg-accent/15 border border-accent/20 rounded-2xl rounded-br-md px-3 py-2">
+                    <pre className="text-xs text-text whitespace-pre-wrap font-mono break-words leading-relaxed">{msg.content}</pre>
+                  </div>
+                  <div className="text-[10px] text-text-muted text-right mt-0.5 mr-1">
+                    {formatTime(msg.timestamp)}
                   </div>
                 </div>
               </div>
-            </div>
-          );
-        }
+            );
+          }
 
-        if (msg.type === 'tool_result') {
-          return (
-            <div key={`tr-${i}`} className="flex justify-start">
-              <div className="max-w-[90%]">
-                <div className="bg-surface-deep border border-border-subtle rounded-xl px-3 py-1.5">
-                  <pre className="text-[10px] text-text-muted font-mono whitespace-pre-wrap break-all leading-relaxed max-h-32 overflow-y-auto">{msg.content}</pre>
+          if (msg.type === 'assistant') {
+            const html = renderMarkdown(msg.content);
+            return (
+              <div key={`a-${i}`} className="flex justify-start">
+                <div className="w-full">
+                  <div
+                    className="bg-surface-raised border border-border rounded-2xl rounded-bl-md px-3 py-2 text-xs leading-relaxed text-text-secondary break-words"
+                    dangerouslySetInnerHTML={{ __html: html }}
+                  />
+                  <div className="text-[10px] text-text-muted mt-0.5 ml-1">
+                    {msg.model && <span className="mr-2">{msg.model.includes('opus') ? 'Opus' : msg.model.includes('sonnet') ? 'Sonnet' : ''}</span>}
+                    {formatTime(msg.timestamp)}
+                  </div>
                 </div>
               </div>
-            </div>
-          );
-        }
+            );
+          }
 
-        return null;
-      })}
+          if (msg.type === 'tool_use') {
+            const contentFragments = msg.content ? parseFilePathsInText(msg.content) : [];
+            const hasPathInContent = contentFragments.some((f) => f.type === 'path');
+            return (
+              <div key={`t-${i}`} className="flex justify-start">
+                <div className="max-w-[90%]">
+                  <div className="bg-claude/10 border border-claude/20 rounded-xl px-3 py-1.5 flex items-start gap-2">
+                    <span className="text-claude text-xs flex-shrink-0 mt-0.5">&#9673;</span>
+                    <div className="min-w-0">
+                      <span className="text-xs font-medium text-claude">{msg.toolName}</span>
+                      {msg.content && (
+                        <pre className="text-[10px] text-text-muted font-mono mt-0.5 whitespace-pre-wrap break-all leading-relaxed">
+                          {hasPathInContent
+                            ? contentFragments.map((f, idx) =>
+                                f.type === 'path' ? (
+                                  <button
+                                    key={idx}
+                                    type="button"
+                                    onClick={() => onFileDownload?.(f.value)}
+                                    className="text-accent underline decoration-dotted hover:text-accent-hover transition-colors"
+                                  >
+                                    {f.value.length > 200 ? f.value.slice(0, 200) + '…' : f.value}
+                                  </button>
+                                ) : (
+                                  <Fragment key={idx}>
+                                    {f.value.length > 200 ? f.value.slice(0, 200) + '…' : f.value}
+                                  </Fragment>
+                                )
+                              )
+                            : msg.content.length > 200
+                              ? msg.content.slice(0, 200) + '...'
+                              : msg.content}
+                        </pre>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          }
 
-      {/* Waiting for input banner — shows when Claude needs a response */}
-      {onQuickAction && pendingSent.length === 0 && messages.length > 0 && (() => {
-        const last = messages[messages.length - 1];
-        const lastTwo = messages.length >= 2 ? messages[messages.length - 2] : null;
-        const isToolWaiting = last.type === 'tool_use';
-        const isAssistantWaiting = last.type === 'assistant' && (
-          // Claude asked a question or presented options
-          /\?\s*$/.test(last.content.trim()) ||
-          /\(y\/n\)/i.test(last.content) ||
-          /\[y\/n/i.test(last.content) ||
-          /plan|proceed|confirm|approve|select|choose|option/i.test(last.content.slice(-200))
-        );
-        // Also detect: assistant message followed by tool_use that's waiting
-        const isAskingAfterTool = last.type === 'assistant' && lastTwo?.type === 'tool_use';
+          if (msg.type === 'tool_result') {
+            const truncated = msg.content.length > 500 ? msg.content.slice(0, 500) + '…' : msg.content;
+            const fragments = parseFilePathsInText(truncated);
+            const hasPath = fragments.some((f) => f.type === 'path');
+            return (
+              <div key={`tr-${i}`} className="flex justify-start">
+                <div className="max-w-[90%]">
+                  <div className="bg-surface-deep border border-border-subtle rounded-xl px-3 py-1.5">
+                    <pre className="text-[10px] text-text-muted font-mono whitespace-pre-wrap break-all leading-relaxed max-h-32 overflow-y-auto">
+                      {hasPath
+                        ? fragments.map((f, idx) =>
+                            f.type === 'path' ? (
+                              <button
+                                key={idx}
+                                type="button"
+                                onClick={() => onFileDownload?.(f.value)}
+                                className="text-accent underline decoration-dotted hover:text-accent-hover transition-colors"
+                              >
+                                {f.value}
+                              </button>
+                            ) : (
+                              <Fragment key={idx}>{f.value}</Fragment>
+                            )
+                          )
+                        : truncated}
+                    </pre>
+                  </div>
+                </div>
+              </div>
+            );
+          }
 
-        if (!isToolWaiting && !isAssistantWaiting && !isAskingAfterTool) return null;
+          return null;
+        })}
 
-        return (
+        {/* Live Claude Code prompt banner — driven by the actual TTY buffer */}
+        {terminalPrompt && onPromptAction && (
           <div className="mx-1 my-2 bg-yellow-500/10 border border-yellow-500/30 rounded-xl px-3 py-2.5">
-            <div className="text-xs text-yellow-400 font-medium mb-2">
-              {isToolWaiting ? 'Claude needs permission to proceed' : 'Claude is waiting for your response'}
+            <div className="text-xs text-yellow-400 font-medium mb-2 break-words">
+              {terminalPrompt.question}
             </div>
-            <div className="flex gap-2 flex-wrap">
-              {isToolWaiting && (
-                <>
-                  <button
-                    onClick={() => onQuickAction('y\r')}
-                    className="flex-1 py-2 text-xs font-medium bg-green-500/20 hover:bg-green-500/30 text-green-400 border border-green-500/30 rounded-lg transition-colors"
-                  >
-                    Allow (y)
-                  </button>
-                  <button
-                    onClick={() => onQuickAction('n\r')}
-                    className="flex-1 py-2 text-xs font-medium bg-red-500/20 hover:bg-red-500/30 text-red-400 border border-red-500/30 rounded-lg transition-colors"
-                  >
-                    Deny (n)
-                  </button>
-                  <button
-                    onClick={() => onQuickAction('a\r')}
-                    className="flex-1 py-2 text-xs font-medium bg-blue-500/20 hover:bg-blue-500/30 text-blue-400 border border-blue-500/30 rounded-lg transition-colors"
-                  >
-                    Always (a)
-                  </button>
-                </>
-              )}
-              {!isToolWaiting && (
-                <>
-                  <button
-                    onClick={() => onQuickAction('y\r')}
-                    className="flex-1 py-2 text-xs font-medium bg-green-500/20 hover:bg-green-500/30 text-green-400 border border-green-500/30 rounded-lg transition-colors"
-                  >
-                    Yes
-                  </button>
-                  <button
-                    onClick={() => onQuickAction('n\r')}
-                    className="flex-1 py-2 text-xs font-medium bg-red-500/20 hover:bg-red-500/30 text-red-400 border border-red-500/30 rounded-lg transition-colors"
-                  >
-                    No
-                  </button>
-                  <button
-                    onClick={() => onQuickAction('\r')}
-                    className="flex-1 py-2 text-xs font-medium bg-surface-raised hover:bg-surface-overlay text-text-secondary border border-border rounded-lg transition-colors"
-                  >
-                    Enter
-                  </button>
-                  <button
-                    onClick={() => onQuickAction('\x1b')}
-                    className="flex-1 py-2 text-xs font-medium bg-surface-raised hover:bg-surface-overlay text-text-secondary border border-border rounded-lg transition-colors"
-                  >
-                    Esc
-                  </button>
-                </>
-              )}
+            <div className="flex flex-col gap-2">
+              {terminalPrompt.options.map((opt) => (
+                <button
+                  key={opt.number}
+                  onClick={() => onPromptAction(opt.number)}
+                  className={`w-full text-left px-3 py-2 text-xs rounded-lg border transition-colors ${
+                    opt.selected
+                      ? 'bg-yellow-500/20 border-yellow-500/40 text-yellow-300'
+                      : 'bg-surface-raised border-border-subtle text-text-secondary hover:bg-surface-overlay'
+                  }`}
+                >
+                  <span className="font-mono text-text-muted mr-2">{opt.number}.</span>
+                  {opt.text}
+                </button>
+              ))}
             </div>
           </div>
-        );
-      })()}
+        )}
 
-      {/* Pending sent messages (not yet in JSONL) */}
-      {pendingSent.map((text, i) => (
-        <div key={`ps-${i}`} className="flex justify-end">
-          <div className="max-w-[85%]">
-            <div className="bg-accent/15 border border-accent/20 rounded-2xl rounded-br-md px-3 py-2 opacity-60">
-              <pre className="text-xs text-text whitespace-pre-wrap font-mono break-words leading-relaxed">{text}</pre>
+        {/* Pending sent messages (not yet in JSONL) */}
+        {pendingSent.map((text, i) => (
+          <div key={`ps-${i}`} className="flex justify-end">
+            <div className="max-w-[85%]">
+              <div className="bg-accent/15 border border-accent/20 rounded-2xl rounded-br-md px-3 py-2 opacity-60">
+                <pre className="text-xs text-text whitespace-pre-wrap font-mono break-words leading-relaxed">{text}</pre>
+              </div>
+              <div className="text-[10px] text-text-muted text-right mt-0.5 mr-1">sending...</div>
             </div>
-            <div className="text-[10px] text-text-muted text-right mt-0.5 mr-1">sending...</div>
           </div>
-        </div>
-      ))}
+        ))}
+      </div>
+
+      {scrolledUp && (
+        <button
+          type="button"
+          onClick={scrollToBottom}
+          className="absolute bottom-3 right-3 z-20 w-10 h-10 rounded-full bg-surface-overlay/95 backdrop-blur border border-border text-text-secondary hover:text-accent hover:border-accent shadow-lg flex items-center justify-center transition-colors"
+          title="Scroll to bottom"
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="6 9 12 15 18 9" />
+          </svg>
+        </button>
+      )}
     </div>
   );
 }
