@@ -55,8 +55,11 @@ async function scutilStop(serviceName: string): Promise<string | null> {
 // States from `get state`: EXITING, DISCONNECTING, CONNECTING, RECONNECTING, CONNECTED.
 
 async function runOsascript(script: string): Promise<{ stdout: string; stderr: string }> {
-  const wrapped = `with timeout of 15 seconds\n${script}\nend timeout`;
-  return runCmd(`osascript -e ${JSON.stringify(wrapped)}`);
+  // Pass the timeout wrapper as separate -e arguments — embedding \n in a single
+  // -e argument breaks because shell quoting doesn't interpret \n as a newline.
+  return runCmd(
+    `osascript -e 'with timeout of 15 seconds' -e ${JSON.stringify(script)} -e 'end timeout'`
+  );
 }
 
 async function getTunnelblickStatus(configName: string): Promise<VpnStatus> {
