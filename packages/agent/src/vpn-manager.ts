@@ -50,6 +50,40 @@ async function scutilStop(serviceName: string): Promise<string | null> {
   return stderr || null;
 }
 
+// ========== macOS Tunnelblick (AppleScript) helpers ==========
+// Tunnelblick doesn't register configs with scutil — it has its own AppleScript API.
+// States from `get state`: EXITING, DISCONNECTING, CONNECTING, RECONNECTING, CONNECTED.
+
+async function runOsascript(script: string): Promise<{ stdout: string; stderr: string }> {
+  const wrapped = `with timeout of 15 seconds\n${script}\nend timeout`;
+  return runCmd(`osascript -e ${JSON.stringify(wrapped)}`);
+}
+
+async function getTunnelblickStatus(configName: string): Promise<VpnStatus> {
+  const { stdout } = await runOsascript(
+    `tell application "Tunnelblick" to get state of first configuration where name = "${configName}"`
+  );
+  const s = stdout.trim();
+  if (s === 'CONNECTED') return 'connected';
+  if (s === 'CONNECTING' || s === 'RECONNECTING') return 'connecting';
+  if (s === 'DISCONNECTING') return 'disconnecting';
+  return 'disconnected';
+}
+
+async function tunnelblickConnect(configName: string): Promise<string | null> {
+  const { stderr } = await runOsascript(
+    `tell application "Tunnelblick" to connect "${configName}"`
+  );
+  return stderr || null;
+}
+
+async function tunnelblickDisconnect(configName: string): Promise<string | null> {
+  const { stderr } = await runOsascript(
+    `tell application "Tunnelblick" to disconnect "${configName}"`
+  );
+  return stderr || null;
+}
+
 // ========== STATUS ==========
 
 async function getWireGuardStatus(profile: VpnProfileConfig): Promise<VpnStatus> {
@@ -88,6 +122,10 @@ async function getOpenVpnStatus(profile: VpnProfileConfig): Promise<VpnStatus> {
       return parseInt(netOut.trim(), 10) > 0 ? 'connected' : 'connecting';
     }
     return 'disconnected';
+  }
+  // macOS: prefer Tunnelblick (AppleScript) if configured
+  if (profile.tunnelblickName) {
+    return getTunnelblickStatus(profile.tunnelblickName);
   }
   // macOS: use scutil --nc if serviceName is configured
   if (profile.serviceName) {
@@ -187,6 +225,10 @@ async function connectOpenVpn(profile: VpnProfileConfig): Promise<string | null>
     }
     return null;
   }
+  // macOS: prefer Tunnelblick (AppleScript) if configured
+  if (profile.tunnelblickName) {
+    return tunnelblickConnect(profile.tunnelblickName);
+  }
   // macOS: use scutil --nc if serviceName is configured (OpenVPN Connect app)
   if (profile.serviceName) {
     return scutilStart(profile.serviceName);
@@ -269,6 +311,10 @@ async function disconnectOpenVpn(profile: VpnProfileConfig): Promise<string | nu
     const output = stdout + stderr;
     if (output.toLowerCase().includes('error')) return output.trim();
     return null;
+  }
+  // macOS: prefer Tunnelblick (AppleScript) if configured
+  if (profile.tunnelblickName) {
+    return tunnelblickDisconnect(profile.tunnelblickName);
   }
   // macOS: use scutil --nc if serviceName is configured
   if (profile.serviceName) {

@@ -6,9 +6,10 @@ export interface VpnProfileConfig {
   id: string;
   name: string;
   type: 'wireguard' | 'openvpn' | 'azure';
-  configFile?: string;    // path to .conf/.ovpn — absolute or relative to ~/.crc-agent/vpn/
-  tunnelName?: string;    // WireGuard: tunnel service name (defaults to id)
-  serviceName?: string;   // macOS: network service name from `scutil --nc list` (e.g., "My Server")
+  configFile?: string;     // path to .conf/.ovpn — absolute or relative to ~/.crc-agent/vpn/
+  tunnelName?: string;     // WireGuard: tunnel service name (defaults to id)
+  serviceName?: string;    // macOS: network service name from `scutil --nc list` (e.g., "My Server")
+  tunnelblickName?: string; // macOS OpenVPN: Tunnelblick configuration name (from `osascript -e 'tell application "Tunnelblick" to get name of configurations'`)
 }
 
 export interface AgentConfig {
