@@ -165,6 +165,18 @@ agentNs.use((socket, next) => {
 
 agentNs.on('connection', (socket) => {
   const agentId = (socket.data as { agentId: string }).agentId;
+
+  // If a prior socket is still attached for this agentId, force-disconnect it.
+  // The stale disconnect handler will no-op (see the currentSocketId check below).
+  const staleSocketId = getAgentSocketId(agentId);
+  if (staleSocketId && staleSocketId !== socket.id) {
+    const staleSocket = agentNs.sockets.get(staleSocketId);
+    if (staleSocket) {
+      logger.info({ agentId, staleSocketId }, 'Evicting stale agent socket on re-register');
+      staleSocket.disconnect(true);
+    }
+  }
+
   registerAgent(agentId, socket.id);
 
   // Update socket IDs for existing sessions and request sync
@@ -243,6 +255,17 @@ agentNs.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
+    // Only tear down the agent entry if THIS socket is still the active one.
+    // Otherwise a late disconnect from a stale duplicate socket (same agentId
+    // but older socketId) would wipe the entry for the live agent.
+    const currentSocketId = getAgentSocketId(agentId);
+    if (currentSocketId !== socket.id) {
+      logger.info(
+        { agentId, socketId: socket.id, currentSocketId },
+        'Stale agent socket disconnected — keeping registry entry'
+      );
+      return;
+    }
     // Mark all sessions dead and notify attached clients
     const deadSessions = markAgentSessionsDead(agentId);
     for (const entry of deadSessions) {
