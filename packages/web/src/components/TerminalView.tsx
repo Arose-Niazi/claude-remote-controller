@@ -251,7 +251,7 @@ export default function TerminalView({ socket }: TerminalViewProps) {
     let lastBellTime = 0;
     const bellDisposable = term.onBell(() => {
       const now = Date.now();
-      if (now - lastBellTime < 5000) return; // throttle: once per 5s
+      if (now - lastBellTime < 2000) return; // throttle: once per 2s
       lastBellTime = now;
 
       const { enabled, addToast } = useNotificationStore.getState();
