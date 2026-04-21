@@ -1,5 +1,8 @@
 import type { ReactNode } from 'react';
 import { useAuthStore } from '../stores/authStore';
+import { useNotificationStore } from '../stores/notificationStore';
+import { isNotificationSupported, requestPermission } from '../lib/notify';
+import Toasts from './Toasts';
 
 interface LayoutProps {
   children: ReactNode;
@@ -8,6 +11,19 @@ interface LayoutProps {
 
 export default function Layout({ children, connected }: LayoutProps) {
   const logout = useAuthStore((s) => s.logout);
+  const notifyEnabled = useNotificationStore((s) => s.enabled);
+  const setNotifyEnabled = useNotificationStore((s) => s.setEnabled);
+
+  const handleToggleNotifications = async () => {
+    if (!notifyEnabled) {
+      if (isNotificationSupported() && Notification.permission === 'default') {
+        await requestPermission();
+      }
+      setNotifyEnabled(true);
+    } else {
+      setNotifyEnabled(false);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-surface-deep text-text">
@@ -27,13 +43,42 @@ export default function Layout({ children, connected }: LayoutProps) {
             title={connected ? 'Connected' : 'Disconnected'}
           />
         </div>
-        <button
-          onClick={logout}
-          className="px-3 py-1.5 text-xs font-medium text-text-secondary hover:text-text bg-surface-raised hover:bg-surface-overlay border border-border rounded-lg transition-all"
-        >
-          Logout
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleToggleNotifications}
+            className={`p-1.5 rounded-lg transition-colors ${
+              notifyEnabled
+                ? 'text-accent bg-accent/10'
+                : 'text-text-muted hover:text-text-secondary'
+            }`}
+            title={notifyEnabled ? 'Notifications on' : 'Notifications off'}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              {notifyEnabled ? (
+                <>
+                  <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+                  <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+                </>
+              ) : (
+                <>
+                  <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+                  <path d="M18.63 13A17.89 17.89 0 0 1 18 8" />
+                  <path d="M6.26 6.26A5.86 5.86 0 0 0 6 8c0 7-3 9-3 9h14" />
+                  <path d="M18 8a6 6 0 0 0-9.33-5" />
+                  <line x1="1" y1="1" x2="23" y2="23" />
+                </>
+              )}
+            </svg>
+          </button>
+          <button
+            onClick={logout}
+            className="px-3 py-1.5 text-xs font-medium text-text-secondary hover:text-text bg-surface-raised hover:bg-surface-overlay border border-border rounded-lg transition-all"
+          >
+            Logout
+          </button>
+        </div>
       </header>
+      <Toasts />
       <main>{children}</main>
     </div>
   );

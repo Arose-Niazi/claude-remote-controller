@@ -211,9 +211,12 @@ agentNs.on('connection', (socket) => {
 
   socket.on(TERMINAL_EXIT, (payload: TerminalExitPayload) => {
     const session = getSession(payload.sessionId);
-    if (session?.clientSocketId) {
-      clientNs.to(session.clientSocketId).emit(TERMINAL_EXIT, payload);
-    }
+    // Broadcast to all clients (not just attached) so notification listeners fire
+    clientNs.emit(TERMINAL_EXIT, {
+      ...payload,
+      sessionName: session?.name,
+      agentId: session?.agentId ?? agentId,
+    });
     killSession(payload.sessionId);
     if (session) broadcastSessionsForAgent(session.agentId);
   });

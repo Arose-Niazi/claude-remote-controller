@@ -86,6 +86,8 @@ export interface TerminalOutputPayload {
 export interface TerminalExitPayload {
   sessionId: string;
   exitCode: number;
+  sessionName?: string;
+  agentId?: string;
 }
 
 export interface TerminalOpenPayload {

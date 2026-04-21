@@ -44,6 +44,7 @@ import {
 
 import { loadConfig } from './config.js';
 import { logger } from './logger.js';
+import { installClaudePlugin } from './claude-plugin-installer.js';
 import { buildHeartbeat } from './heartbeat.js';
 import { listDirectory, downloadFile } from './file-explorer.js';
 import { getProfiles, connectVpn, disconnectVpn } from './vpn-manager.js';
@@ -63,6 +64,9 @@ import {
 
 const config = loadConfig();
 logger.info({ agentId: config.agentId, serverUrl: config.serverUrl }, 'Starting agent');
+
+// Auto-install Claude Code notification hooks (idempotent, version-checked)
+installClaudePlugin();
 
 const socket = io(config.serverUrl + '/agent', {
   auth: { agentId: config.agentId, secret: config.secret },
