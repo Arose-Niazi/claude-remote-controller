@@ -1,5 +1,5 @@
 import * as pty from 'node-pty';
-import { writeFileSync, mkdirSync, existsSync } from 'fs';
+import { writeFileSync, readFileSync, mkdirSync, existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { SESSION_BUFFER_SIZE } from '@crc/shared';
@@ -17,21 +17,37 @@ const ZSH_DIR = join(INIT_DIR, 'zsh');
 const ZSH_RC = join(ZSH_DIR, '.zshrc');
 const ZSH_ENV = join(ZSH_DIR, '.zshenv');
 
+const INIT_VERSION = '2'; // bump to force regeneration
+
 function ensureInitFiles(): void {
-  if (existsSync(BASH_INIT) && existsSync(ZSH_RC)) return;
+  const versionFile = join(INIT_DIR, '.version');
+  if (existsSync(versionFile)) {
+    try {
+      if (readFileSync(versionFile, 'utf-8').trim() === INIT_VERSION) return;
+    } catch { /* regenerate */ }
+  }
   mkdirSync(ZSH_DIR, { recursive: true });
 
+  // Bash: The DEBUG trap fires before EVERY simple command, including
+  // those inside PROMPT_COMMAND. So we compute the elapsed time IN the
+  // trap (saved to __crc_elapsed) and check it in PROMPT_COMMAND.
+  // The DEBUG trap before PROMPT_COMMAND's first command gives us the
+  // duration of the LAST user command.  __crc_armed skips the first
+  // prompt (shell init) so we don't get a false notification on startup.
   writeFileSync(BASH_INIT, [
-    '# Source user config',
     '[ -f ~/.bash_profile ] && source ~/.bash_profile',
     '[ -f ~/.bashrc ] && source ~/.bashrc',
-    '# CRC: bell after commands that take >= ' + THRESHOLD + 's',
     '__crc_s=$SECONDS',
-    "trap '__crc_s=$SECONDS' DEBUG",
-    'PROMPT_COMMAND=\'[ $((SECONDS-${__crc_s:-$SECONDS})) -ge ' + THRESHOLD + ' ] && printf "\\a";\'${PROMPT_COMMAND:+ $PROMPT_COMMAND}',
+    '__crc_elapsed=0',
+    '__crc_armed=0',
+    '__crc_orig_pc="$PROMPT_COMMAND"',
+    `trap '__crc_elapsed=$((SECONDS - __crc_s)); __crc_s=$SECONDS' DEBUG`,
+    `PROMPT_COMMAND='[ "$__crc_armed" = 1 ] && [ \${__crc_elapsed:-0} -ge ${THRESHOLD} ] && printf "\\a"; __crc_armed=1; eval "$__crc_orig_pc"'`,
     '',
   ].join('\n'), 'utf-8');
 
+  // Zsh: preexec/precmd don't have the bash DEBUG trap issue —
+  // preexec fires only for user commands, not for precmd itself.
   writeFileSync(ZSH_ENV, [
     '[ -f "${ZDOTDIR_ORIG:-$HOME}/.zshenv" ] && source "${ZDOTDIR_ORIG:-$HOME}/.zshenv"',
     '',
@@ -39,10 +55,10 @@ function ensureInitFiles(): void {
 
   writeFileSync(ZSH_RC, [
     '[ -f "${ZDOTDIR_ORIG:-$HOME}/.zshrc" ] && source "${ZDOTDIR_ORIG:-$HOME}/.zshrc"',
-    '# CRC: bell after commands that take >= ' + THRESHOLD + 's',
     '__crc_s=$SECONDS',
-    '__crc_preexec() { __crc_s=$SECONDS; }',
-    `__crc_precmd() { (( SECONDS - __crc_s >= ${THRESHOLD} )) && printf '\\a'; }`,
+    '__crc_armed=0',
+    `__crc_preexec() { __crc_s=$SECONDS; }`,
+    `__crc_precmd() { (( __crc_armed )) && (( SECONDS - __crc_s >= ${THRESHOLD} )) && printf '\\a'; __crc_armed=1; }`,
     'autoload -Uz add-zsh-hook 2>/dev/null',
     'if type add-zsh-hook &>/dev/null; then',
     '  add-zsh-hook preexec __crc_preexec',
@@ -50,6 +66,8 @@ function ensureInitFiles(): void {
     'fi',
     '',
   ].join('\n'), 'utf-8');
+
+  writeFileSync(versionFile, INIT_VERSION, 'utf-8');
 }
 
 export class PtySession {
