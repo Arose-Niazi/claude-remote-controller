@@ -1,0 +1,11 @@
+{
+  "name": "Claude Remote Controller",
+  "short_name": "Claude Remote",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#1a1a1e",
+  "theme_color": "#1a1a1e",
+  "icons": [
+    { "src": "/favicon.ico", "sizes": "any", "type": "image/x-icon" }
+  ]
+}

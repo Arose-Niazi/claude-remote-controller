@@ -1,3 +1,19 @@
+// ── Service Worker registration ─────────────────────────────────────
+// ServiceWorkerRegistration.showNotification() works in background tabs
+// on mobile — unlike `new Notification()` which browsers block.
+
+let swRegistration: ServiceWorkerRegistration | null = null;
+
+export function registerServiceWorker(): void {
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js').then((reg) => {
+      swRegistration = reg;
+    }).catch(() => { /* SW not available */ });
+  }
+}
+
+// ── Permission ──────────────────────────────────────────────────────
+
 export function isNotificationSupported(): boolean {
   return 'Notification' in window;
 }
@@ -7,9 +23,22 @@ export async function requestPermission(): Promise<NotificationPermission> {
   return Notification.requestPermission();
 }
 
+// ── Browser notification ────────────────────────────────────────────
+
 export function showBrowserNotification(title: string, body: string): void {
   if (!isNotificationSupported() || Notification.permission !== 'granted') return;
 
+  // Prefer service worker notification (works in background on mobile)
+  if (swRegistration) {
+    swRegistration.showNotification(title, {
+      body,
+      icon: '/favicon.ico',
+      tag: 'crc-' + Date.now(),
+    }).catch(() => { /* fallback below */ });
+    return;
+  }
+
+  // Fallback: regular Notification (foreground only on mobile)
   const n = new Notification(title, {
     body,
     icon: '/favicon.ico',
@@ -23,6 +52,8 @@ export function showBrowserNotification(title: string, body: string): void {
 
   setTimeout(() => n.close(), 15_000);
 }
+
+// ── Sound ───────────────────────────────────────────────────────────
 
 export function playSound(): void {
   try {
@@ -45,6 +76,8 @@ export function playSound(): void {
     // Audio not available
   }
 }
+
+// ── Title flash ─────────────────────────────────────────────────────
 
 let titleFlashTimer: number | null = null;
 const originalTitle = document.title;
