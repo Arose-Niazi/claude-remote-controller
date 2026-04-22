@@ -89,6 +89,9 @@ export default function TerminalView({ socket }: TerminalViewProps) {
   const claudeNotifiedRef = useRef(false);
   const lastConvMsgTimeRef = useRef(0);
   const lastTermOutputTimeRef = useRef(0);
+  // Global cooldown: no notification fires within 10s of the last one
+  const lastNotifyTimeRef = useRef(0);
+  const NOTIFY_COOLDOWN = 10_000;
 
   const agent = agents.find((a) => a.id === agentId);
   const initialPath = agent?.homeDirectory || agent?.rootPaths?.[0] || '/';
@@ -137,9 +140,11 @@ export default function TerminalView({ socket }: TerminalViewProps) {
   // Notify when Claude shows a prompt mid-task (permission/selection question)
   useEffect(() => {
     if (!terminalPrompt) return;
-    if (claudeTurnRef.current === 'idle') return; // skip initial load
+    if (claudeTurnRef.current === 'idle') return;
+    if (Date.now() - lastNotifyTimeRef.current < NOTIFY_COOLDOWN) return;
     const { enabled, addToast } = useNotificationStore.getState();
     if (!enabled) return;
+    lastNotifyTimeRef.current = Date.now();
     const title = 'Claude needs input';
     const body = terminalPrompt.question || 'Waiting for your response';
     addToast(title, body);
@@ -251,12 +256,14 @@ export default function TerminalView({ socket }: TerminalViewProps) {
     let lastBellTime = 0;
     const bellDisposable = term.onBell(() => {
       const now = Date.now();
-      if (now - lastBellTime < 2000) return; // throttle: once per 2s
+      if (now - lastBellTime < 2000) return;
       lastBellTime = now;
+      if (now - lastNotifyTimeRef.current < NOTIFY_COOLDOWN) return;
 
       const { enabled, addToast } = useNotificationStore.getState();
       if (!enabled) return;
 
+      lastNotifyTimeRef.current = now;
       const title = 'Terminal Bell';
       const body = 'A command wants your attention';
       addToast(title, body);
@@ -275,6 +282,7 @@ export default function TerminalView({ socket }: TerminalViewProps) {
       const { enabled, addToast } = useNotificationStore.getState();
       const rawTitle = parts[1] || '';
       const rawBody = parts.slice(2).join(';') || '';
+      const now = Date.now();
 
       // Handle structured notifications from CRC or Warp plugins
       if (rawTitle === 'crc://agent' || rawTitle === 'warp://cli-agent') {
@@ -282,30 +290,19 @@ export default function TerminalView({ socket }: TerminalViewProps) {
           const payload = JSON.parse(rawBody);
           const event = payload.event as string;
 
-          if (event === 'stop') {
-            if (claudeNotifiedRef.current) return true; // dedup
+          if (event === 'stop' || event === 'idle_prompt' || event === 'permission_request') {
             claudeTurnRef.current = 'idle';
             claudeNotifiedRef.current = true;
-            if (enabled) {
-              const q = payload.query ? `"${payload.query}"` : 'Task';
-              const title = 'Claude finished';
-              const body = payload.response
-                ? `${q} — ${payload.response}`.slice(0, 200)
-                : `${q} complete`;
-              addToast(title, body);
-              showBrowserNotification(title, body);
-              playSound();
-              flashTitle('Claude finished!');
-            }
-          } else if (event === 'idle_prompt' || event === 'permission_request') {
-            if (claudeNotifiedRef.current) return true; // dedup
-            claudeTurnRef.current = 'idle';
-            claudeNotifiedRef.current = true;
-            if (enabled) {
-              const title = event === 'permission_request'
-                ? 'Claude needs permission'
-                : 'Claude needs input';
-              const body = payload.summary || 'Waiting for your response';
+            if (enabled && now - lastNotifyTimeRef.current >= NOTIFY_COOLDOWN) {
+              lastNotifyTimeRef.current = now;
+              const title = event === 'stop'
+                ? 'Claude finished'
+                : event === 'permission_request'
+                  ? 'Claude needs permission'
+                  : 'Claude needs input';
+              const body = event === 'stop'
+                ? (payload.query ? `"${payload.query}" — ${payload.response || 'done'}`.slice(0, 200) : 'Task complete')
+                : (payload.summary || 'Waiting for your response');
               addToast(title, body);
               showBrowserNotification(title, body);
               playSound();
@@ -318,14 +315,11 @@ export default function TerminalView({ socket }: TerminalViewProps) {
             claudeTurnRef.current = 'claude_active';
           }
         } catch {
-          if (enabled) {
-            addToast('Claude Code', rawBody);
-            showBrowserNotification('Claude Code', rawBody);
-            playSound();
-          }
+          // ignore malformed
         }
-      } else if (enabled) {
+      } else if (enabled && now - lastNotifyTimeRef.current >= NOTIFY_COOLDOWN) {
         // Plain OSC 777 notification
+        lastNotifyTimeRef.current = now;
         addToast(rawTitle, rawBody);
         showBrowserNotification(rawTitle, rawBody);
         playSound();
@@ -446,9 +440,10 @@ export default function TerminalView({ socket }: TerminalViewProps) {
           const now = Date.now();
           const convIdle = now - lastConvMsgTimeRef.current > 8000;
           const outputIdle = now - lastTermOutputTimeRef.current > 5000;
-          if (convIdle && outputIdle) {
+          if (convIdle && outputIdle && now - lastNotifyTimeRef.current >= NOTIFY_COOLDOWN) {
             claudeNotifiedRef.current = true;
             claudeTurnRef.current = 'idle';
+            lastNotifyTimeRef.current = now;
             const title = 'Claude finished';
             const body = 'Task complete — ready for your next prompt';
             addToast(title, body);
