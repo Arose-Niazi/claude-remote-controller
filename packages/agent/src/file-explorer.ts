@@ -1,11 +1,28 @@
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 import { logger } from './logger.js';
+import { FILE_MAX_SIZE } from '@crc/shared';
 import type { FileEntry } from '@crc/shared';
+
+// The agent's own config/secret directory. Browsing or downloading anything
+// inside it (e.g. the agent secret) is denied so it can't be exfiltrated.
+const SECRET_DIR = path.join(os.homedir(), '.crc-agent');
+
+// True if `resolved` is the secret dir itself or any descendant of it.
+function isInSecretDir(resolved: string): boolean {
+  const rel = path.relative(SECRET_DIR, resolved);
+  // Empty rel => same path. A rel that doesn't start with '..' and isn't
+  // absolute means resolved is inside SECRET_DIR.
+  return rel === '' || (!rel.startsWith('..' + path.sep) && rel !== '..' && !path.isAbsolute(rel));
+}
 
 export function listDirectory(dirPath: string): { entries: FileEntry[]; error?: string } {
   try {
     const resolved = path.resolve(dirPath);
+    if (isInSecretDir(resolved)) {
+      return { entries: [], error: 'Access denied' };
+    }
     if (!fs.existsSync(resolved)) {
       return { entries: [], error: 'Path does not exist' };
     }
@@ -54,6 +71,9 @@ export async function downloadFile(
 ): Promise<{ fileId: string; fileName: string; downloadUrl: string; size: number } | { error: string }> {
   try {
     const resolved = path.resolve(filePath);
+    if (isInSecretDir(resolved)) {
+      return { error: 'Access denied' };
+    }
     if (!fs.existsSync(resolved)) {
       return { error: 'File does not exist' };
     }
@@ -62,9 +82,14 @@ export async function downloadFile(
     if (stat.isDirectory()) {
       return { error: 'Cannot download a directory' };
     }
+    if (stat.size > FILE_MAX_SIZE) {
+      return { error: `File too large (max ${FILE_MAX_SIZE} bytes)` };
+    }
 
     const fileName = path.basename(resolved);
-    const fileBuffer = fs.readFileSync(resolved);
+    // Stream the file rather than reading it fully into memory, so large
+    // downloads stay memory-bounded.
+    const fileStream = fs.createReadStream(resolved);
 
     // POST to server's receive endpoint
     const baseUrl = serverUrl.replace('wss://', 'https://').replace('ws://', 'http://');
@@ -76,9 +101,11 @@ export async function downloadFile(
         'X-File-Name': fileName,
         'X-Agent-Id': agentId,
         'X-Agent-Secret': secret,
+        'Content-Length': String(stat.size),
       },
-      body: fileBuffer,
-    });
+      body: fileStream as any,
+      duplex: 'half',
+    } as any);
 
     if (!res.ok) {
       return { error: `Upload failed: ${res.status}` };

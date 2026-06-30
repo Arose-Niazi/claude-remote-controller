@@ -3,7 +3,7 @@ import path from 'path';
 import os from 'os';
 import readline from 'readline';
 import { logger } from './logger.js';
-import { encodeProjectPath } from './claude-path.js';
+import { encodeProjectPath, findProjectDirs } from './claude-path.js';
 
 const CLAUDE_PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
 
@@ -22,31 +22,66 @@ export interface ConversationData {
   totalLines: number;
 }
 
-function findProjectDir(encoded: string): string | null {
+/**
+ * Resolve the on-disk project directory for a given project path.
+ * Tries exact encoding, then a case-insensitive match, then a cwd-based
+ * scanning fallback (via findProjectDirs) so a project still resolves when
+ * the exact encoded name doesn't match.
+ */
+function findProjectDir(projectPath: string): string | null {
+  const encoded = encodeProjectPath(projectPath);
+
   const dirPath = path.join(CLAUDE_PROJECTS_DIR, encoded);
   if (fs.existsSync(dirPath)) return dirPath;
 
-  // Case-insensitive fallback (Windows drive letters may differ in case)
   if (!fs.existsSync(CLAUDE_PROJECTS_DIR)) return null;
-  const lowerEncoded = encoded.toLowerCase();
-  const match = fs.readdirSync(CLAUDE_PROJECTS_DIR).find(
-    (d) => d.toLowerCase() === lowerEncoded && fs.statSync(path.join(CLAUDE_PROJECTS_DIR, d)).isDirectory()
-  );
-  return match ? path.join(CLAUDE_PROJECTS_DIR, match) : null;
+
+  // List dirs safely — a single bad entry (broken symlink / EACCES / ENOENT
+  // race while Claude rotates files) must not reject the whole resolution.
+  let allDirs: string[];
+  try {
+    allDirs = fs.readdirSync(CLAUDE_PROJECTS_DIR).filter((d) => {
+      try {
+        return fs.statSync(path.join(CLAUDE_PROJECTS_DIR, d)).isDirectory();
+      } catch {
+        return false;
+      }
+    });
+  } catch {
+    return null;
+  }
+
+  // Case-insensitive + anchored scanning fallback.
+  const matches = findProjectDirs(allDirs, projectPath);
+  if (matches.length > 0) {
+    return path.join(CLAUDE_PROJECTS_DIR, matches[0]);
+  }
+  return null;
 }
 
 function findLatestSessionFile(projectPath: string): { filePath: string; sessionId: string } | null {
-  const encoded = encodeProjectPath(projectPath);
-  const dirPath = findProjectDir(encoded);
+  const dirPath = findProjectDir(projectPath);
 
   if (!dirPath) return null;
 
-  const files = fs.readdirSync(dirPath)
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(dirPath);
+  } catch {
+    return null;
+  }
+
+  const files = entries
     .filter((f) => f.endsWith('.jsonl') && !f.includes('/'))
-    .map((f) => ({
-      name: f,
-      mtime: fs.statSync(path.join(dirPath, f)).mtimeMs,
-    }))
+    .map((f) => {
+      // A per-entry stat can throw (file rotated away mid-scan); skip on error.
+      try {
+        return { name: f, mtime: fs.statSync(path.join(dirPath, f)).mtimeMs };
+      } catch {
+        return null;
+      }
+    })
+    .filter((f): f is { name: string; mtime: number } => f !== null)
     .sort((a, b) => b.mtime - a.mtime);
 
   if (files.length === 0) return null;
@@ -66,8 +101,7 @@ export async function readConversation(
   let sessionId: string;
 
   if (specificSessionId) {
-    const encoded = encodeProjectPath(projectPath);
-    const dirPath = findProjectDir(encoded);
+    const dirPath = findProjectDir(projectPath);
     if (!dirPath) return null;
     filePath = path.join(dirPath, `${specificSessionId}.jsonl`);
     sessionId = specificSessionId;

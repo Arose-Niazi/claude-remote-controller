@@ -11,6 +11,7 @@ import { showBrowserNotification, playSound, flashTitle } from '../lib/notify';
 
 export function useSocket(): { socket: Socket | null; connected: boolean } {
   const token = useAuthStore((s) => s.token);
+  const logout = useAuthStore((s) => s.logout);
   const setAgents = useAgentStore((s) => s.setAgents);
   const setSessions = useSessionStore((s) => s.setSessions);
   const [connected, setConnected] = useState(false);
@@ -29,6 +30,17 @@ export function useSocket(): { socket: Socket | null; connected: boolean } {
 
     socket.on('connect', () => setConnected(true));
     socket.on('disconnect', () => setConnected(false));
+    // connect_error fires on EVERY failed (re)connection attempt — including
+    // transient network blips on mobile, where Socket.IO keeps auto-retrying.
+    // Only log out on an actual auth/handshake rejection (a dead token after a
+    // secret rotation); otherwise stay put and let reconnection self-heal.
+    socket.on('connect_error', (err: Error) => {
+      setConnected(false);
+      console.error('[socket] connect_error:', err.message);
+      if (/auth|unauthor|forbidden|token|secret/i.test(err.message || '')) {
+        logout();
+      }
+    });
     socket.on(AGENTS_UPDATE, (agents: AgentInfo[]) => setAgents(agents));
     socket.on(SESSIONS_UPDATE, (sessions: TerminalSession[]) => setSessions(sessions));
 
@@ -49,11 +61,17 @@ export function useSocket(): { socket: Socket | null; connected: boolean } {
     return () => {
       socket.off('connect');
       socket.off('disconnect');
+      socket.off('connect_error');
       socket.off(AGENTS_UPDATE);
       socket.off(SESSIONS_UPDATE);
       socket.off(TERMINAL_EXIT);
+      // Disconnect (not just remove listeners) so StrictMode mount/unmount
+      // cycles don't leak a live socket connection.
+      disconnectSocket();
+      socketRef.current = null;
+      setConnected(false);
     };
-  }, [token, setAgents, setSessions]);
+  }, [token, logout, setAgents, setSessions]);
 
   return { socket: socketRef.current, connected };
 }

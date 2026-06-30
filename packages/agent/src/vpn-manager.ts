@@ -11,6 +11,16 @@ const execAsync = promisify(exec);
 const isWindows = process.platform === 'win32';
 const VPN_DIR = path.join(os.homedir(), '.crc-agent', 'vpn');
 
+// Escape a value for embedding inside a /bin/sh single-quoted string.
+function shq(value: string): string {
+  return value.replace(/'/g, "'\\''");
+}
+
+// Escape a value for embedding inside a PowerShell single-quoted string.
+function psq(value: string): string {
+  return value.replace(/'/g, "''");
+}
+
 async function runCmd(cmd: string, shell?: string): Promise<{ stdout: string; stderr: string }> {
   try {
     return await execAsync(cmd, {
@@ -32,7 +42,7 @@ function getConfigPath(profile: VpnProfileConfig): string {
 // ========== macOS scutil helpers ==========
 
 async function getScutilStatus(serviceName: string): Promise<VpnStatus> {
-  const { stdout } = await runCmd(`scutil --nc status '${serviceName}'`);
+  const { stdout } = await runCmd(`scutil --nc status '${shq(serviceName)}'`);
   const firstLine = stdout.trim().split('\n')[0];
   if (firstLine === 'Connected') return 'connected';
   if (firstLine === 'Connecting') return 'connecting';
@@ -41,12 +51,12 @@ async function getScutilStatus(serviceName: string): Promise<VpnStatus> {
 }
 
 async function scutilStart(serviceName: string): Promise<string | null> {
-  const { stderr } = await runCmd(`scutil --nc start '${serviceName}'`);
+  const { stderr } = await runCmd(`scutil --nc start '${shq(serviceName)}'`);
   return stderr || null;
 }
 
 async function scutilStop(serviceName: string): Promise<string | null> {
-  const { stderr } = await runCmd(`scutil --nc stop '${serviceName}'`);
+  const { stderr } = await runCmd(`scutil --nc stop '${shq(serviceName)}'`);
   return stderr || null;
 }
 
@@ -62,9 +72,14 @@ async function runOsascript(script: string): Promise<{ stdout: string; stderr: s
   );
 }
 
+// Escape a value for embedding inside an AppleScript double-quoted string.
+function asq(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
 async function getTunnelblickStatus(configName: string): Promise<VpnStatus> {
   const { stdout } = await runOsascript(
-    `tell application "Tunnelblick" to get state of first configuration where name = "${configName}"`
+    `tell application "Tunnelblick" to get state of first configuration where name = "${asq(configName)}"`
   );
   const s = stdout.trim();
   if (s === 'CONNECTED') return 'connected';
@@ -75,14 +90,14 @@ async function getTunnelblickStatus(configName: string): Promise<VpnStatus> {
 
 async function tunnelblickConnect(configName: string): Promise<string | null> {
   const { stderr } = await runOsascript(
-    `tell application "Tunnelblick" to connect "${configName}"`
+    `tell application "Tunnelblick" to connect "${asq(configName)}"`
   );
   return stderr || null;
 }
 
 async function tunnelblickDisconnect(configName: string): Promise<string | null> {
   const { stderr } = await runOsascript(
-    `tell application "Tunnelblick" to disconnect "${configName}"`
+    `tell application "Tunnelblick" to disconnect "${asq(configName)}"`
   );
   return stderr || null;
 }
@@ -93,7 +108,7 @@ async function getWireGuardStatus(profile: VpnProfileConfig): Promise<VpnStatus>
   if (isWindows) {
     const tunnelName = profile.tunnelName || profile.id;
     const { stdout } = await runCmd(
-      `Get-Service -Name 'WireGuardTunnel$${tunnelName}' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Status`
+      `Get-Service -Name 'WireGuardTunnel$${psq(tunnelName)}' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Status`
     );
     const s = stdout.trim();
     if (s === 'Running') return 'connected';
@@ -107,7 +122,7 @@ async function getWireGuardStatus(profile: VpnProfileConfig): Promise<VpnStatus>
   }
   // Fallback: wg-quick CLI
   const tunnelName = profile.tunnelName || profile.id;
-  const { stdout } = await runCmd(`wg show ${tunnelName} 2>/dev/null`);
+  const { stdout } = await runCmd(`wg show '${shq(tunnelName)}' 2>/dev/null`);
   return stdout.trim() ? 'connected' : 'disconnected';
 }
 
@@ -181,7 +196,7 @@ async function connectWireGuard(profile: VpnProfileConfig): Promise<string | nul
     const script = `
       & 'C:\\Program Files\\WireGuard\\wireguard.exe' /installtunnelservice '${confPath.replace(/'/g, "''")}';
       Start-Sleep -Seconds 2;
-      Set-Service -Name 'WireGuardTunnel\$${tunnelName}' -StartupType Manual -ErrorAction SilentlyContinue
+      Set-Service -Name 'WireGuardTunnel\$${psq(tunnelName)}' -StartupType Manual -ErrorAction SilentlyContinue
     `.trim();
     await runCmd(
       `Start-Process powershell -ArgumentList '-NoProfile','-Command','${script.replace(/'/g, "''")}' -Verb RunAs -Wait -ErrorAction Stop 2>&1`
@@ -197,7 +212,7 @@ async function connectWireGuard(profile: VpnProfileConfig): Promise<string | nul
   }
   // Fallback: wg-quick CLI (requires sudo + brew install wireguard-tools)
   const confPath = getConfigPath(profile);
-  const { stderr } = await runCmd(`sudo wg-quick up ${confPath}`);
+  const { stderr } = await runCmd(`sudo wg-quick up '${shq(confPath)}'`);
   return stderr || null;
 }
 
@@ -216,7 +231,7 @@ async function connectOpenVpn(profile: VpnProfileConfig): Promise<string | null>
     await runCmd(`& '${connector}' stop 2>&1`);
     await new Promise((r) => setTimeout(r, 1000));
     // Set profile and start
-    const { stdout: setOut, stderr: setErr } = await runCmd(`& '${connector}' set-config profile '${confPath}' 2>&1`);
+    const { stdout: setOut, stderr: setErr } = await runCmd(`& '${connector}' set-config profile '${psq(confPath)}' 2>&1`);
     const setOutput = setOut + setErr;
     if (setOutput.toLowerCase().includes('failed')) {
       return `Failed to set profile: ${setOutput.trim()}`;
@@ -241,7 +256,7 @@ async function connectOpenVpn(profile: VpnProfileConfig): Promise<string | null>
   if (!fs.existsSync(confPath)) {
     return `Config file not found: ${confPath}`;
   }
-  const { stderr } = await runCmd(`sudo openvpn --config '${confPath}' --daemon`);
+  const { stderr } = await runCmd(`sudo openvpn --config '${shq(confPath)}' --daemon`);
   return stderr || null;
 }
 
@@ -252,7 +267,7 @@ async function connectAzure(profile: VpnProfileConfig): Promise<string | null> {
       return `Config file not found: ${confPath}`;
     }
     // Import the XML config into Azure VPN Client and open the app
-    await runCmd(`& 'AzureVpn.exe' -i '${confPath}' 2>&1`);
+    await runCmd(`& 'AzureVpn.exe' -i '${psq(confPath)}' 2>&1`);
     await new Promise((r) => setTimeout(r, 2000));
     await runCmd(`Start-Process 'shell:AppsFolder\\Microsoft.AzureVpn_8wekyb3d8bbwe!App'`);
     return 'Azure VPN app opened — requires Azure AD sign-in to connect';
@@ -286,7 +301,7 @@ async function disconnectWireGuard(profile: VpnProfileConfig): Promise<string | 
   const tunnelName = profile.tunnelName || profile.id;
   if (isWindows) {
     // Use elevated PowerShell to uninstall the tunnel service
-    const script = `& 'C:\\Program Files\\WireGuard\\wireguard.exe' /uninstalltunnelservice '${tunnelName}'`;
+    const script = `& 'C:\\Program Files\\WireGuard\\wireguard.exe' /uninstalltunnelservice '${psq(tunnelName)}'`;
     await runCmd(
       `Start-Process powershell -ArgumentList '-NoProfile','-Command','${script.replace(/'/g, "''")}' -Verb RunAs -Wait -ErrorAction Stop 2>&1`
     );
@@ -303,7 +318,7 @@ async function disconnectWireGuard(profile: VpnProfileConfig): Promise<string | 
   }
   // Fallback: wg-quick CLI
   const confPath = getConfigPath(profile);
-  const { stderr } = await runCmd(`sudo wg-quick down ${confPath}`);
+  const { stderr } = await runCmd(`sudo wg-quick down '${shq(confPath)}'`);
   return stderr || null;
 }
 

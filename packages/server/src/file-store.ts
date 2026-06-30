@@ -1,8 +1,8 @@
 import fs from 'fs';
 import path from 'path';
-import { createHmac } from 'crypto';
+import { createHmac, timingSafeEqual } from 'crypto';
 import { v4 as uuid } from 'uuid';
-import { FILE_TTL, FILE_CLEANUP_INTERVAL, FILE_MAX_SIZE } from '@crc/shared';
+import { FILE_TTL, FILE_CLEANUP_INTERVAL, FILE_MAX_STORAGE } from '@crc/shared';
 import { config } from './config.js';
 import { logger } from './logger.js';
 
@@ -22,34 +22,67 @@ export interface StoredFile {
   expiresAt: number;
 }
 
-export function storeUpload(fileBuffer: Buffer, fileName: string): StoredFile {
-  ensureDirs();
-  const fileId = uuid();
-  const dir = path.join(uploadsDir(), fileId);
-  fs.mkdirSync(dir, { recursive: true });
-
-  const expiresAt = Date.now() + FILE_TTL;
-  const meta = { fileName, size: fileBuffer.length, uploadedAt: Date.now(), expiresAt, downloaded: false };
-  fs.writeFileSync(path.join(dir, 'meta.json'), JSON.stringify(meta));
-  fs.writeFileSync(path.join(dir, 'data'), fileBuffer);
-
-  const downloadUrl = `/api/files/d/${generateSignedToken(fileId, expiresAt)}`;
-  return { fileId, fileName, size: fileBuffer.length, downloadUrl, expiresAt };
+// Handle returned by beginStore — the caller streams bytes into dataPath, then
+// calls finalize(size) (or abort() on error) to write meta.json and obtain the
+// StoredFile metadata. This keeps memory bounded for large uploads.
+export interface PendingStore {
+  fileId: string;
+  dataPath: string;
+  finalize: (size: number) => StoredFile;
+  abort: () => void;
 }
 
-export function storeReceive(fileBuffer: Buffer, fileName: string): StoredFile {
+function beginStore(baseDir: string, fileName: string): PendingStore {
   ensureDirs();
   const fileId = uuid();
-  const dir = path.join(receivesDir(), fileId);
+  const dir = path.join(baseDir, fileId);
   fs.mkdirSync(dir, { recursive: true });
+  const dataPath = path.join(dir, 'data');
 
-  const expiresAt = Date.now() + FILE_TTL;
-  const meta = { fileName, size: fileBuffer.length, uploadedAt: Date.now(), expiresAt, downloaded: false };
-  fs.writeFileSync(path.join(dir, 'meta.json'), JSON.stringify(meta));
-  fs.writeFileSync(path.join(dir, 'data'), fileBuffer);
+  return {
+    fileId,
+    dataPath,
+    finalize(size: number): StoredFile {
+      const expiresAt = Date.now() + FILE_TTL;
+      const meta = { fileName, size, uploadedAt: Date.now(), expiresAt, downloaded: false };
+      fs.writeFileSync(path.join(dir, 'meta.json'), JSON.stringify(meta));
+      const downloadUrl = `/api/files/d/${generateSignedToken(fileId, expiresAt)}`;
+      return { fileId, fileName, size, downloadUrl, expiresAt };
+    },
+    abort(): void {
+      fs.rmSync(dir, { recursive: true, force: true });
+    },
+  };
+}
 
-  const downloadUrl = `/api/files/d/${generateSignedToken(fileId, expiresAt)}`;
-  return { fileId, fileName, size: fileBuffer.length, downloadUrl, expiresAt };
+export function beginUpload(fileName: string): PendingStore {
+  return beginStore(uploadsDir(), fileName);
+}
+
+export function beginReceive(fileName: string): PendingStore {
+  return beginStore(receivesDir(), fileName);
+}
+
+// Sum the bytes of all stored data files across uploads + receives, so callers
+// can enforce FILE_MAX_STORAGE before accepting a new file.
+export function getStoredBytes(): number {
+  let total = 0;
+  for (const baseDir of [uploadsDir(), receivesDir()]) {
+    if (!fs.existsSync(baseDir)) continue;
+    for (const fileId of fs.readdirSync(baseDir)) {
+      const dataPath = path.join(baseDir, fileId, 'data');
+      try {
+        total += fs.statSync(dataPath).size;
+      } catch {
+        // Missing/unreadable data file — ignore.
+      }
+    }
+  }
+  return total;
+}
+
+export function getStorageCap(): number {
+  return FILE_MAX_STORAGE;
 }
 
 export function getFileByToken(token: string): { filePath: string; fileName: string } | null {
@@ -62,11 +95,32 @@ export function getFileByToken(token: string): { filePath: string; fileName: str
     const metaPath = path.join(dir, 'meta.json');
     const dataPath = path.join(dir, 'data');
     if (fs.existsSync(metaPath) && fs.existsSync(dataPath)) {
-      const meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
-      return { filePath: dataPath, fileName: meta.fileName };
+      try {
+        const meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
+        return { filePath: dataPath, fileName: meta.fileName };
+      } catch {
+        // Corrupt meta.json — treat as not-found.
+        return null;
+      }
     }
   }
   return null;
+}
+
+// Mark a downloaded receive so getPendingReceives stops re-listing it. Called
+// after a successful download. Looks in receives only (uploads aren't listed).
+export function markDownloaded(token: string): void {
+  const parsed = validateSignedToken(token);
+  if (!parsed) return;
+  const metaPath = path.join(receivesDir(), parsed.fileId, 'meta.json');
+  if (!fs.existsSync(metaPath)) return;
+  try {
+    const meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
+    meta.downloaded = true;
+    fs.writeFileSync(metaPath, JSON.stringify(meta));
+  } catch {
+    // Corrupt meta.json — nothing to update.
+  }
 }
 
 export function getPendingReceives(): StoredFile[] {
@@ -78,7 +132,13 @@ export function getPendingReceives(): StoredFile[] {
   for (const fileId of fs.readdirSync(dir)) {
     const metaPath = path.join(dir, fileId, 'meta.json');
     if (!fs.existsSync(metaPath)) continue;
-    const meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
+    let meta: any;
+    try {
+      meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
+    } catch {
+      // Corrupt meta.json — skip this entry.
+      continue;
+    }
     if (meta.downloaded || meta.expiresAt < Date.now()) continue;
     result.push({
       fileId,
@@ -107,7 +167,10 @@ function validateSignedToken(token: string): { fileId: string; expiresAt: number
     if (Date.now() > expiresAt) return null;
 
     const expectedSig = createHmac('sha256', config.tokenSecret).update(`${fileId}:${expiresAt}`).digest('base64url');
-    if (sig !== expectedSig) return null;
+    const sigBuf = Buffer.from(sig);
+    const expectedBuf = Buffer.from(expectedSig);
+    if (sigBuf.length !== expectedBuf.length) return null;
+    if (!timingSafeEqual(sigBuf, expectedBuf)) return null;
     return { fileId, expiresAt };
   } catch {
     return null;

@@ -79,21 +79,32 @@ export async function listClaudeSessions(filterProjectPath?: string): Promise<Cl
 
   if (!fs.existsSync(CLAUDE_PROJECTS_DIR)) return sessions;
 
+  // Per-entry stat that never throws — a broken symlink / EACCES / ENOENT race
+  // (Claude rotating files) on one entry must not reject the whole listing.
+  const isDirSafe = (d: string): boolean => {
+    try {
+      return fs.statSync(path.join(CLAUDE_PROJECTS_DIR, d)).isDirectory();
+    } catch {
+      return false;
+    }
+  };
+
+  let allEntries: string[];
+  try {
+    allEntries = fs.readdirSync(CLAUDE_PROJECTS_DIR);
+  } catch {
+    return sessions;
+  }
+
   let projectDirs: string[];
   if (filterProjectPath) {
     // Find dirs that could match this project path
     // Since dir names use '-' for '/', we match by checking if the cwd in sessions matches
-    const allDirs = fs.readdirSync(CLAUDE_PROJECTS_DIR).filter((d) => {
-      const full = path.join(CLAUDE_PROJECTS_DIR, d);
-      return fs.statSync(full).isDirectory();
-    });
+    const allDirs = allEntries.filter(isDirSafe);
     projectDirs = findProjectDirs(allDirs, filterProjectPath);
     if (projectDirs.length === 0) return sessions;
   } else {
-    projectDirs = fs.readdirSync(CLAUDE_PROJECTS_DIR).filter((d) => {
-      const full = path.join(CLAUDE_PROJECTS_DIR, d);
-      return fs.statSync(full).isDirectory() && !d.startsWith('-private-');
-    });
+    projectDirs = allEntries.filter((d) => isDirSafe(d) && !d.startsWith('-private-'));
   }
 
   for (const dirName of projectDirs) {

@@ -178,13 +178,50 @@ function isCurrentVersion(): boolean {
   }
 }
 
+/**
+ * Check whether the installed_plugins.json registry has a correct entry for this
+ * plugin (present, current version, and pointing at the expected install path).
+ */
+function isRegistryCurrent(installPath: string): boolean {
+  const registryPath = getRegistryPath();
+  try {
+    if (!existsSync(registryPath)) return false;
+    const registry = JSON.parse(readFileSync(registryPath, 'utf-8'));
+    const entries = registry?.plugins?.[REGISTRY_KEY];
+    if (!Array.isArray(entries) || entries.length === 0) return false;
+    return entries.some(
+      (e: any) => e && e.installPath === installPath && e.version === PLUGIN_VERSION
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function installClaudePlugin(): void {
-  if (isCurrentVersion()) {
-    logger.info('CRC Claude Code plugin already installed (v%s)', PLUGIN_VERSION);
+  // Hooks are bash/jq/dev-tty only — they cannot run on Windows.
+  if (process.platform === 'win32') {
+    logger.info('Skipping CRC Claude Code plugin install on Windows (hooks require bash/jq/dev-tty)');
     return;
   }
 
   const pluginDir = getPluginDir();
+
+  // Fully skip only when BOTH the on-disk files AND the registry entry are current.
+  if (isCurrentVersion()) {
+    if (isRegistryCurrent(pluginDir)) {
+      logger.info('CRC Claude Code plugin already installed (v%s)', PLUGIN_VERSION);
+      return;
+    }
+    // Files are current but the registry entry is missing / stale — repair it.
+    try {
+      updateRegistry(pluginDir);
+      logger.info('Repaired CRC Claude Code plugin registry entry (v%s) at %s', PLUGIN_VERSION, pluginDir);
+    } catch (err) {
+      logger.warn({ err }, 'Failed to repair CRC Claude Code plugin registry entry');
+    }
+    return;
+  }
+
   try {
     mkdirSync(join(pluginDir, '.claude-plugin'), { recursive: true });
     mkdirSync(join(pluginDir, 'hooks'), { recursive: true });

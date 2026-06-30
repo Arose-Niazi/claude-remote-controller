@@ -1,13 +1,22 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import type { Socket } from 'socket.io-client';
 import {
   FILES_LIST,
   FILES_LIST_RESULT,
   FILES_DOWNLOAD,
+  FILES_DOWNLOAD_READY,
+  FILES_DOWNLOAD_ERROR,
   AGENT_EXEC,
   AGENT_EXEC_RESULT,
 } from '@crc/shared';
-import type { FileEntry, FilesListResultPayload, AgentExecResultPayload } from '@crc/shared';
+import type {
+  FileEntry,
+  FilesListResultPayload,
+  FilesDownloadReadyPayload,
+  FilesDownloadErrorPayload,
+  AgentExecResultPayload,
+} from '@crc/shared';
+import FileNotifications from './FileNotifications';
 
 interface FileExplorerProps {
   socket: Socket | null;
@@ -41,6 +50,21 @@ export default function FileExplorer({
   const [gitPullStatus, setGitPullStatus] = useState<'idle' | 'pulling' | 'done' | 'error'>('idle');
   const [gitPullMsg, setGitPullMsg] = useState('');
 
+  // Track the latest requestId we sent for each one-shot RPC so we can ignore
+  // stale/foreign results delivered over the shared socket.
+  const listRequestIdRef = useRef<string | null>(null);
+  const pullRequestIdRef = useRef<string | null>(null);
+  const downloadRequestIdsRef = useRef<Set<string>>(new Set());
+  const downloadCounter = useRef(0);
+
+  // Downloads this explorer initiated. Owned here (not by an ambient TerminalView
+  // listener) so downloads work even when opened from the SessionManager modal.
+  const [downloads, setDownloads] = useState<
+    { id: number; fileName: string; downloadUrl: string; size: number }[]
+  >([]);
+  const dismissDownload = (id: number) =>
+    setDownloads((prev) => prev.filter((d) => d.id !== id));
+
   const isGitRepo = entries.some((e) => e.isDirectory && e.name === '.git');
   const hasClaudeDir = entries.some((e) => e.isDirectory && e.name === '.claude');
 
@@ -48,12 +72,17 @@ export default function FileExplorer({
     if (!socket) return;
     setGitPullStatus('pulling');
     setGitPullMsg('');
-    socket.emit(AGENT_EXEC, { agentId, command: 'git pull', cwd: currentPath });
+    const requestId = crypto.randomUUID();
+    pullRequestIdRef.current = requestId;
+    socket.emit(AGENT_EXEC, { agentId, command: 'git pull', cwd: currentPath, requestId });
   };
 
   useEffect(() => {
     if (!socket) return;
     const handleExecResult = (payload: AgentExecResultPayload) => {
+      // Only act on the result for our pending pull request.
+      if (gitPullStatus !== 'pulling') return;
+      if (!payload.requestId || payload.requestId !== pullRequestIdRef.current) return;
       const output = (payload.stdout + payload.stderr).trim();
       if (payload.error) {
         setGitPullStatus('error');
@@ -68,7 +97,7 @@ export default function FileExplorer({
     };
     socket.on(AGENT_EXEC_RESULT, handleExecResult);
     return () => { socket.off(AGENT_EXEC_RESULT, handleExecResult); };
-  }, [socket, currentPath]);
+  }, [socket, currentPath, gitPullStatus]);
 
   // Sync to initialPath when heartbeat arrives with the real homeDir
   // (only if user hasn't manually navigated yet)
@@ -83,7 +112,9 @@ export default function FileExplorer({
       if (!socket) return;
       setLoading(true);
       setError('');
-      socket.emit(FILES_LIST, { agentId, path: dirPath });
+      const requestId = crypto.randomUUID();
+      listRequestIdRef.current = requestId;
+      socket.emit(FILES_LIST, { agentId, path: dirPath, requestId });
     },
     [socket, agentId]
   );
@@ -96,13 +127,15 @@ export default function FileExplorer({
     if (!socket) return;
 
     const handleResult = (payload: FilesListResultPayload) => {
+      // Ignore stale or foreign results delivered over the shared socket.
+      if (!payload.requestId || payload.requestId !== listRequestIdRef.current) return;
+      if (payload.agentId && payload.agentId !== agentId) return;
       setLoading(false);
       if (payload.error) {
         setError(payload.error);
         setEntries([]);
       } else {
         setEntries(payload.entries);
-        setCurrentPath(payload.path);
       }
     };
 
@@ -110,7 +143,7 @@ export default function FileExplorer({
     return () => {
       socket.off(FILES_LIST_RESULT, handleResult);
     };
-  }, [socket]);
+  }, [socket, agentId]);
 
   const navigateTo = (name: string) => {
     setHasNavigated(true);
@@ -153,8 +186,39 @@ export default function FileExplorer({
     const fullPath = currentPath.endsWith(sep)
       ? currentPath + name
       : currentPath + sep + name;
-    socket.emit(FILES_DOWNLOAD, { agentId, path: fullPath });
+    const requestId = crypto.randomUUID();
+    downloadRequestIdsRef.current.add(requestId);
+    socket.emit(FILES_DOWNLOAD, { agentId, path: fullPath, requestId });
   };
+
+  // Handle download results for requests this explorer made.
+  useEffect(() => {
+    if (!socket) return;
+    const onReady = (payload: FilesDownloadReadyPayload) => {
+      if (!payload.requestId || !downloadRequestIdsRef.current.has(payload.requestId)) return;
+      downloadRequestIdsRef.current.delete(payload.requestId);
+      setDownloads((prev) => [
+        ...prev,
+        {
+          id: ++downloadCounter.current,
+          fileName: payload.fileName,
+          downloadUrl: payload.downloadUrl,
+          size: payload.size,
+        },
+      ]);
+    };
+    const onError = (payload: FilesDownloadErrorPayload) => {
+      if (!payload.requestId || !downloadRequestIdsRef.current.has(payload.requestId)) return;
+      downloadRequestIdsRef.current.delete(payload.requestId);
+      setError(`Download failed: ${payload.error}`);
+    };
+    socket.on(FILES_DOWNLOAD_READY, onReady);
+    socket.on(FILES_DOWNLOAD_ERROR, onError);
+    return () => {
+      socket.off(FILES_DOWNLOAD_READY, onReady);
+      socket.off(FILES_DOWNLOAD_ERROR, onError);
+    };
+  }, [socket]);
 
   // Build breadcrumb segments
   const sep = currentPath.includes('\\') ? '\\' : '/';
@@ -315,6 +379,8 @@ export default function FileExplorer({
             </div>
           ))}
       </div>
+
+      <FileNotifications downloads={downloads} onDismiss={dismissDownload} />
     </div>
   );
 }

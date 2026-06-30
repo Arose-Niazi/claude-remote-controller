@@ -35,6 +35,20 @@ export function useTerminal({
   const sessionIdRef = useRef<string | null>(existingSessionId || null);
   const [sessionId, setSessionId] = useState<string | null>(existingSessionId || null);
 
+  // Keep the latest callbacks in refs so the socket listener effect can depend
+  // only on [socket] instead of churning off()/on() on every render when the
+  // caller passes inline (re-created) callbacks.
+  const onReadyRef = useRef(onReady);
+  const onExitRef = useRef(onExit);
+  const onBufferRef = useRef(onBuffer);
+  const onDetachedRef = useRef(onDetached);
+  useEffect(() => {
+    onReadyRef.current = onReady;
+    onExitRef.current = onExit;
+    onBufferRef.current = onBuffer;
+    onDetachedRef.current = onDetached;
+  }, [onReady, onExit, onBuffer, onDetached]);
+
   const create = useCallback(
     (cols: number, rows: number, name?: string) => {
       if (!socket) return;
@@ -89,20 +103,20 @@ export function useTerminal({
     const handleReady = (payload: { sessionId: string }) => {
       sessionIdRef.current = payload.sessionId;
       setSessionId(payload.sessionId);
-      onReady?.(payload.sessionId);
+      onReadyRef.current?.(payload.sessionId);
     };
 
     const handleExit = (payload: { sessionId: string; exitCode: number }) => {
       if (payload.sessionId === sessionIdRef.current) {
         sessionIdRef.current = null;
         setSessionId(null);
-        onExit?.(payload.exitCode);
+        onExitRef.current?.(payload.exitCode);
       }
     };
 
     const handleBuffer = (payload: { sessionId: string; data: string }) => {
       if (payload.sessionId === sessionIdRef.current) {
-        onBuffer?.(payload.data);
+        onBufferRef.current?.(payload.data);
       }
     };
 
@@ -110,7 +124,7 @@ export function useTerminal({
       if (payload.sessionId === sessionIdRef.current || payload.sessionId === '') {
         sessionIdRef.current = null;
         setSessionId(null);
-        onDetached?.(payload.reason);
+        onDetachedRef.current?.(payload.reason);
       }
     };
 
@@ -125,7 +139,7 @@ export function useTerminal({
       socket.off(SESSION_BUFFER, handleBuffer);
       socket.off(SESSION_DETACHED, handleDetached);
     };
-  }, [socket, onReady, onExit, onBuffer, onDetached]);
+  }, [socket]);
 
   return { sessionId, create, attach, write, resize, detach, kill };
 }

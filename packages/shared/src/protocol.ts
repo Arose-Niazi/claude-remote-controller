@@ -53,6 +53,7 @@ export const FILES_DOWNLOAD = 'files:download' as const;
 // Server -> Agent / Agent -> Server
 export const FILES_LIST_RESULT = 'files:list:result' as const;
 export const FILES_DOWNLOAD_READY = 'files:download:ready' as const;
+export const FILES_DOWNLOAD_ERROR = 'files:download:error' as const;
 
 // --- Agent Exec (one-shot command) ---
 // Client -> Server -> Agent
@@ -71,11 +72,6 @@ export const CLAUDE_CONV_DATA = 'claude:conv:data' as const;
 export const CLAUDE_SESSIONS_LIST = 'claude:sessions:list' as const;
 // Agent -> Server -> Client
 export const CLAUDE_SESSIONS_RESULT = 'claude:sessions:result' as const;
-
-// --- File Events ---
-export const FILE_READY = 'file:ready' as const;
-export const FILE_EXPIRED = 'file:expired' as const;
-export const FILE_GRAB = 'file:grab' as const;
 
 // --- Payload types ---
 export interface TerminalOutputPayload {
@@ -196,6 +192,7 @@ export interface AgentExecPayload {
 
 export interface AgentExecResultPayload {
   requestId: string;
+  agentId?: string;
   stdout: string;
   stderr: string;
   error?: string;
@@ -240,11 +237,6 @@ export interface ClaudeSessionsResultPayload {
   error?: string;
 }
 
-export interface FileGrabPayload {
-  agentId: string;
-  remotePath: string;
-}
-
 // --- File Explorer Payloads ---
 
 export interface FilesListPayload {
@@ -255,6 +247,7 @@ export interface FilesListPayload {
 
 export interface FilesListResultPayload {
   requestId: string;
+  agentId?: string;
   path: string;
   entries: import('./types.js').FileEntry[];
   error?: string;
@@ -268,8 +261,16 @@ export interface FilesDownloadPayload {
 
 export interface FilesDownloadReadyPayload {
   requestId: string;
+  agentId?: string;
   fileId: string;
   fileName: string;
   downloadUrl: string;
   size: number;
+}
+
+export interface FilesDownloadErrorPayload {
+  requestId: string;
+  agentId?: string;
+  path?: string;
+  error: string;
 }

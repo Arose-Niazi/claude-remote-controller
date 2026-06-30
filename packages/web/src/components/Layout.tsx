@@ -15,15 +15,31 @@ export default function Layout({ children, connected }: LayoutProps) {
   const setNotifyEnabled = useNotificationStore((s) => s.setEnabled);
 
   const handleToggleNotifications = async () => {
-    if (!notifyEnabled) {
-      if (isNotificationSupported() && Notification.permission === 'default') {
-        await requestPermission();
-      }
-      setNotifyEnabled(true);
-    } else {
+    if (notifyEnabled) {
       setNotifyEnabled(false);
+      return;
     }
+
+    // Turning notifications on. In-app toasts always work; OS notifications
+    // additionally require the browser permission. Request it and only treat
+    // OS notifications as "granted" when the user actually allows them.
+    if (isNotificationSupported() && Notification.permission === 'default') {
+      const result = await requestPermission();
+      if (result !== 'granted') {
+        // Permission denied/dismissed: enable in-app toasts only.
+        setNotifyEnabled(true);
+        return;
+      }
+    }
+    // Either already granted, denied earlier, or notifications unsupported —
+    // enabling still turns on in-app toasts (and OS notifications when allowed).
+    setNotifyEnabled(true);
   };
+
+  // OS-level notifications are only actually delivered when the browser
+  // permission is granted; otherwise we fall back to in-app toasts only.
+  const osBlocked =
+    notifyEnabled && (!isNotificationSupported() || Notification.permission !== 'granted');
 
   return (
     <div className="min-h-screen bg-surface-deep text-text">
@@ -47,11 +63,19 @@ export default function Layout({ children, connected }: LayoutProps) {
           <button
             onClick={handleToggleNotifications}
             className={`p-1.5 rounded-lg transition-colors ${
-              notifyEnabled
-                ? 'text-accent bg-accent/10'
-                : 'text-text-muted hover:text-text-secondary'
+              !notifyEnabled
+                ? 'text-text-muted hover:text-text-secondary'
+                : osBlocked
+                ? 'text-amber-400 bg-amber-500/10'
+                : 'text-accent bg-accent/10'
             }`}
-            title={notifyEnabled ? 'Notifications on' : 'Notifications off'}
+            title={
+              !notifyEnabled
+                ? 'Notifications off'
+                : osBlocked
+                ? 'In-app alerts on — OS notifications blocked (allow them in your browser settings)'
+                : 'Notifications on'
+            }
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               {notifyEnabled ? (

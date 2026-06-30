@@ -9,7 +9,7 @@ export interface AgentInfo {
   id: string;
   name: string;
   hostname: string;
-  platform: 'win32' | 'darwin';
+  platform: 'win32' | 'darwin' | 'linux';
   arch: string;
   status: 'online' | 'offline';
   cpuUsage: number;
@@ -38,7 +38,7 @@ export interface TerminalSession {
 
 export interface HeartbeatPayload {
   hostname: string;
-  platform: 'win32' | 'darwin';
+  platform: 'win32' | 'darwin' | 'linux';
   arch: string;
   cpuUsage: number;
   memoryUsage: number;
@@ -83,16 +83,4 @@ export interface ClaudeSessionInfo {
   model?: string;
   slug?: string;
   gitBranch?: string;
-}
-
-// --- File Transfer ---
-
-export interface TransferInfo {
-  fileId: string;
-  fileName: string;
-  size: number;
-  downloadUrl: string;
-  expiresAt: number;
-  direction: 'to-agent' | 'to-phone';
-  status: 'ready' | 'downloaded' | 'expired';
 }

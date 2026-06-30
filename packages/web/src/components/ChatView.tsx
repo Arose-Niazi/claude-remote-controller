@@ -22,22 +22,27 @@ function parseTableRow(line: string): string[] {
 }
 
 function inlineMarkdown(text: string): string {
+  // Escape HTML exactly once, up front. Markdown syntax (backticks, **) is not
+  // affected by escaping, so we layer the inline elements on the escaped string
+  // and emit the already-escaped captured content as-is (no second escape).
   let s = escapeHtml(text);
-  s = s.replace(/\*\*(.+?)\*\*/g, '<strong class="font-semibold text-text">$1</strong>');
   s = s.replace(/`([^`]+)`/g, (_, code: string) => {
-    // If the backticked content looks like a file path, turn it into a download button.
+    // `code` is already HTML-escaped. If it looks like a file path, turn it into
+    // a download button (the attribute holds the same single-escaped value; the
+    // browser decodes it back to the real path when read via dataset).
     const fragments = parseFilePathsInText(code);
     if (fragments.some((f) => f.type === 'path')) {
       return fragments
         .map((f) =>
           f.type === 'path'
-            ? `<button type="button" class="chat-file-link bg-surface-deep px-1 py-0.5 rounded text-accent text-xs font-mono underline decoration-dotted hover:bg-accent/20 hover:text-accent-hover transition-colors" data-file-path="${escapeHtml(f.value)}">${escapeHtml(f.value)}</button>`
-            : `<code class="bg-surface-deep px-1 py-0.5 rounded text-accent text-xs font-mono">${escapeHtml(f.value)}</code>`
+            ? `<button type="button" class="chat-file-link bg-surface-deep px-1 py-0.5 rounded text-accent text-xs font-mono underline decoration-dotted hover:bg-accent/20 hover:text-accent-hover transition-colors" data-file-path="${f.value}">${f.value}</button>`
+            : `<code class="bg-surface-deep px-1 py-0.5 rounded text-accent text-xs font-mono">${f.value}</code>`
         )
         .join('');
     }
-    return `<code class="bg-surface-deep px-1 py-0.5 rounded text-accent text-xs font-mono">${escapeHtml(code)}</code>`;
+    return `<code class="bg-surface-deep px-1 py-0.5 rounded text-accent text-xs font-mono">${code}</code>`;
   });
+  s = s.replace(/\*\*(.+?)\*\*/g, (_, b: string) => `<strong class="font-semibold text-text">${b}</strong>`);
   return s;
 }
 

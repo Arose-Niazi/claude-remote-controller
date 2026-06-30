@@ -4,17 +4,32 @@ import { execSync } from 'child_process';
 import type { HeartbeatPayload } from '@crc/shared';
 import { getActiveSessionCount } from './terminal-manager.js';
 
+// Previous { idle, total } CPU tick sample, used to compute usage as a delta
+// between calls. os.cpus() reports cumulative-since-boot times, so summing
+// them once yields a flat near-idle figure; the delta reflects recent load.
+let prevCpu: { idle: number; total: number } | null = null;
+
 function getCpuUsage(): number {
   const cpus = os.cpus();
-  let totalIdle = 0;
-  let totalTick = 0;
+  let idle = 0;
+  let total = 0;
   for (const cpu of cpus) {
     for (const type of Object.values(cpu.times)) {
-      totalTick += type;
+      total += type;
     }
-    totalIdle += cpu.times.idle;
+    idle += cpu.times.idle;
   }
-  return Math.round((1 - totalIdle / totalTick) * 100);
+
+  const prev = prevCpu;
+  prevCpu = { idle, total };
+
+  if (!prev) return 0; // first sample has no baseline to diff against
+
+  const idleDelta = idle - prev.idle;
+  const totalDelta = total - prev.total;
+  if (totalDelta <= 0) return 0;
+
+  return Math.round((1 - idleDelta / totalDelta) * 100);
 }
 
 function getRootPaths(): string[] {
@@ -39,7 +54,7 @@ export function buildHeartbeat(homeDir?: string): HeartbeatPayload {
 
   return {
     hostname: os.hostname(),
-    platform: process.platform as 'win32' | 'darwin',
+    platform: process.platform as 'win32' | 'darwin' | 'linux',
     arch: os.arch(),
     cpuUsage: getCpuUsage(),
     memoryUsage: Math.round(((totalMem - freeMem) / totalMem) * 100),

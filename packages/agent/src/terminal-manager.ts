@@ -88,3 +88,21 @@ export function getAliveSessionIds(): string[] {
 export function getActiveSessionCount(): number {
   return sessions.size;
 }
+
+// Kill and remove any detached sessions whose idle duration exceeds maxIdleMs.
+// Returns the ids of the sessions that were reaped.
+export function reapDetachedSessions(maxIdleMs: number): string[] {
+  const now = Date.now();
+  const reaped: string[] = [];
+  for (const [id, session] of sessions) {
+    if (session.isAttached()) continue;
+    const detachedAt = session.getDetachedAt();
+    if (detachedAt > 0 && now - detachedAt > maxIdleMs) {
+      session.kill();
+      sessions.delete(id);
+      reaped.push(id);
+      logger.info({ sessionId: id, idleMs: now - detachedAt }, 'PTY session reaped (idle)');
+    }
+  }
+  return reaped;
+}

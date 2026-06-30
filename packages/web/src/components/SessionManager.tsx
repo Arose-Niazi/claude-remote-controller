@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import type { Socket } from 'socket.io-client';
 import { SESSION_LIST, SESSION_KILL, SESSION_KILL_ALL, SESSION_RENAME, AGENT_EXEC, AGENT_EXEC_RESULT } from '@crc/shared';
@@ -35,6 +35,17 @@ export default function SessionManager({ socket }: SessionManagerProps) {
   const agent = agents.find((a) => a.id === agentId);
   const browseInitialPath = agent?.homeDirectory || '/';
 
+  // Holds the in-flight settings-write result listener so we can detach it when
+  // the user cancels, on unmount, or once it fires.
+  const settingsResultRef = useRef<((payload: AgentExecResultPayload) => void) | null>(null);
+
+  const detachSettingsListener = () => {
+    if (settingsResultRef.current) {
+      socket?.off(AGENT_EXEC_RESULT, settingsResultRef.current);
+      settingsResultRef.current = null;
+    }
+  };
+
   const agentSessions = sessions.filter((s) => s.agentId === agentId);
 
   useEffect(() => {
@@ -42,6 +53,16 @@ export default function SessionManager({ socket }: SessionManagerProps) {
       socket.emit(SESSION_LIST, { agentId });
     }
   }, [socket, agentId]);
+
+  // Clean up any pending settings-write listener on unmount.
+  useEffect(() => {
+    return () => {
+      if (settingsResultRef.current) {
+        socket?.off(AGENT_EXEC_RESULT, settingsResultRef.current);
+        settingsResultRef.current = null;
+      }
+    };
+  }, [socket]);
 
   function handleCreate() {
     navigate(`/terminal/${agentId}/new`);
@@ -148,24 +169,45 @@ export default function SessionManager({ socket }: SessionManagerProps) {
                 <button
                   key={mode}
                   onClick={() => {
+                    if (!socket) return;
                     const settingsJson = JSON.stringify(
                       { permissions: { defaultMode: mode }, effortLevel: 'high' },
                       null,
                       4
                     );
-                    const escaped = settingsJson.replace(/'/g, "'\\''");
-                    const cmd = `mkdir -p '${permPrompt.path}/.claude' && echo '${escaped}' > '${permPrompt.path}/.claude/settings.json'`;
-                    socket?.emit(AGENT_EXEC, { agentId, command: cmd, cwd: permPrompt.path });
+                    const targetPath = permPrompt.path;
+                    let cmd: string;
+                    if (agent?.platform === 'win32') {
+                      // PowerShell: create the .claude dir and write settings.json.
+                      // Single-quote escaping for PowerShell is doubling the quote.
+                      const psEscape = (s: string) => s.replace(/'/g, "''");
+                      const dir = `${targetPath}\\.claude`;
+                      const file = `${targetPath}\\.claude\\settings.json`;
+                      cmd =
+                        `New-Item -ItemType Directory -Force -Path '${psEscape(dir)}' | Out-Null; ` +
+                        `Set-Content -Path '${psEscape(file)}' -Value '${psEscape(settingsJson)}' -Encoding utf8`;
+                    } else {
+                      const shEscape = (s: string) => s.replace(/'/g, "'\\''");
+                      const escapedJson = shEscape(settingsJson);
+                      const escapedPath = shEscape(targetPath);
+                      cmd = `mkdir -p '${escapedPath}/.claude' && echo '${escapedJson}' > '${escapedPath}/.claude/settings.json'`;
+                    }
+                    const requestId = crypto.randomUUID();
+                    socket.emit(AGENT_EXEC, { agentId, command: cmd, cwd: targetPath, requestId });
 
-                    // Listen for result then navigate
-                    const onResult = (_payload: AgentExecResultPayload) => {
-                      socket?.off(AGENT_EXEC_RESULT, onResult);
+                    // Detach any earlier pending listener, then listen for the
+                    // matching result before navigating.
+                    detachSettingsListener();
+                    const onResult = (payload: AgentExecResultPayload) => {
+                      if (payload.requestId !== requestId) return;
+                      detachSettingsListener();
                       setPermPrompt(null);
                       setShowBrowse(false);
-                      const startCmd = `cd ${JSON.stringify(permPrompt.path)} && claude`;
+                      const startCmd = `cd ${JSON.stringify(targetPath)} && claude`;
                       navigate(`/terminal/${agentId}/new?cmd=${encodeURIComponent(startCmd)}`);
                     };
-                    socket?.on(AGENT_EXEC_RESULT, onResult);
+                    settingsResultRef.current = onResult;
+                    socket.on(AGENT_EXEC_RESULT, onResult);
                   }}
                   className="w-full text-left px-4 py-3 rounded-xl border border-border-subtle bg-surface-raised hover:border-accent hover:bg-surface-overlay transition-colors"
                 >
@@ -175,7 +217,10 @@ export default function SessionManager({ socket }: SessionManagerProps) {
               ))}
             </div>
             <button
-              onClick={() => setPermPrompt(null)}
+              onClick={() => {
+                detachSettingsListener();
+                setPermPrompt(null);
+              }}
               className="w-full mt-3 py-1.5 text-xs text-text-muted hover:text-text transition-colors"
             >
               Cancel

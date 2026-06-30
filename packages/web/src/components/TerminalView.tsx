@@ -11,6 +11,7 @@ import {
   CLAUDE_CONV_DATA,
   FILES_DOWNLOAD,
   FILES_DOWNLOAD_READY,
+  FILES_DOWNLOAD_ERROR,
 } from '@crc/shared';
 import { useNotificationStore } from '../stores/notificationStore';
 import { showBrowserNotification, playSound, flashTitle } from '../lib/notify';
@@ -18,6 +19,7 @@ import type {
   ClaudeConvMessage,
   ClaudeConvDataPayload,
   FilesDownloadReadyPayload,
+  FilesDownloadErrorPayload,
 } from '@crc/shared';
 import { useTerminal } from '../hooks/useTerminal';
 import { useAuthStore } from '../stores/authStore';
@@ -52,6 +54,9 @@ export default function TerminalView({ socket }: TerminalViewProps) {
   const termContainerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
+  // Ensures the session bootstrap (create/attach) runs exactly once, even
+  // though its effect depends on `socket` and may re-run when socket changes.
+  const didBootstrapRef = useRef(false);
   const isNewSession = paramSessionId === 'new';
   const [uploading, setUploading] = useState(false);
   const [copyLabel, setCopyLabel] = useState('Copy');
@@ -68,11 +73,18 @@ export default function TerminalView({ socket }: TerminalViewProps) {
   const convLineRef = useRef(0);
   const convProjectRef = useRef<string | null>(null);
   const convClaudeSessionRef = useRef<string | null>(null);
+  // Live mirror of the terminal sessionId (null for a brand-new session until
+  // the server assigns one). Read this inside long-lived listeners so we don't
+  // capture a stale null from when the effect was first set up.
+  const sessionIdRef = useRef<string | null>(null);
   const ctrlRef = useRef(false);
   const altRef = useRef(false);
   const [downloads, setDownloads] = useState<
     { id: number; fileName: string; downloadUrl: string; size: number }[]
   >([]);
+  // requestIds of FILES_DOWNLOAD requests this view has emitted, so result/error
+  // events can be correlated back to us (secondary guard alongside agentId).
+  const downloadRequestIdsRef = useRef<Set<string>>(new Set());
   const token = useAuthStore((s) => s.token);
   const agents = useAgentStore((s) => s.agents);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -89,9 +101,18 @@ export default function TerminalView({ socket }: TerminalViewProps) {
   const claudeNotifiedRef = useRef(false);
   const lastConvMsgTimeRef = useRef(0);
   const lastTermOutputTimeRef = useRef(0);
-  // Global cooldown: no notification fires within 10s of the last one
-  const lastNotifyTimeRef = useRef(0);
+  // Per-category cooldown: a category may not re-fire within 10s, but distinct
+  // categories (prompt / bell / osc-stop / osc-permission / conv-idle / osc-plain)
+  // never block each other.
   const NOTIFY_COOLDOWN = 10_000;
+  const lastNotifyByCategoryRef = useRef<Map<string, number>>(new Map());
+  // Returns true when this category is allowed to notify (and records the time).
+  const canNotify = useCallback((category: string, now = Date.now()) => {
+    const last = lastNotifyByCategoryRef.current.get(category) || 0;
+    if (now - last < NOTIFY_COOLDOWN) return false;
+    lastNotifyByCategoryRef.current.set(category, now);
+    return true;
+  }, []);
 
   const agent = agents.find((a) => a.id === agentId);
   const initialPath = agent?.homeDirectory || agent?.rootPaths?.[0] || '/';
@@ -137,21 +158,22 @@ export default function TerminalView({ socket }: TerminalViewProps) {
     },
   });
 
-  // Notify when Claude shows a prompt mid-task (permission/selection question)
+  // Notify when Claude shows a prompt (permission/selection question).
+  // Fires even in raw/no-conversation mode where claudeTurn stays 'idle' — a
+  // freshly detected prompt is enough on its own, subject to the per-category
+  // cooldown so we don't spam on every redraw.
   useEffect(() => {
     if (!terminalPrompt) return;
-    if (claudeTurnRef.current === 'idle') return;
-    if (Date.now() - lastNotifyTimeRef.current < NOTIFY_COOLDOWN) return;
     const { enabled, addToast } = useNotificationStore.getState();
     if (!enabled) return;
-    lastNotifyTimeRef.current = Date.now();
+    if (!canNotify('prompt')) return;
     const title = 'Claude needs input';
     const body = terminalPrompt.question || 'Waiting for your response';
     addToast(title, body);
     showBrowserNotification(title, body);
     playSound();
     flashTitle('Claude needs input');
-  }, [terminalPrompt]);
+  }, [terminalPrompt, canNotify]);
 
   // Clear stale pending messages after 30 seconds
   useEffect(() => {
@@ -233,18 +255,17 @@ export default function TerminalView({ socket }: TerminalViewProps) {
       write(out);
     });
 
-    if (isNewSession) {
-      create(term.cols, term.rows);
-    } else if (paramSessionId) {
-      attach(paramSessionId, term.cols, term.rows);
-    }
+    // NOTE: session bootstrap (create/attach) happens in a separate effect that
+    // waits for `socket` to be available — see below. Doing it here would fire
+    // before the socket connects on a fresh load/refresh, and never retry.
 
     const onResize = () => {
       fitAddon.fit();
       resize(term.cols, term.rows);
     };
+    const onOrientationChange = () => setTimeout(onResize, 100);
     window.addEventListener('resize', onResize);
-    window.addEventListener('orientationchange', () => setTimeout(onResize, 100));
+    window.addEventListener('orientationchange', onOrientationChange);
 
     const scrollDisposable = term.onScroll(() => {
       const buf = term.buffer.active;
@@ -258,12 +279,11 @@ export default function TerminalView({ socket }: TerminalViewProps) {
       const now = Date.now();
       if (now - lastBellTime < 2000) return;
       lastBellTime = now;
-      if (now - lastNotifyTimeRef.current < NOTIFY_COOLDOWN) return;
 
       const { enabled, addToast } = useNotificationStore.getState();
       if (!enabled) return;
+      if (!canNotify('bell', now)) return;
 
-      lastNotifyTimeRef.current = now;
       const title = 'Terminal Bell';
       const body = 'A command wants your attention';
       addToast(title, body);
@@ -291,10 +311,16 @@ export default function TerminalView({ socket }: TerminalViewProps) {
           const event = payload.event as string;
 
           if (event === 'stop' || event === 'idle_prompt' || event === 'permission_request') {
+            // Mark Claude idle regardless of notification cooldown — this state
+            // transition must not be lost just because we suppress the toast.
             claudeTurnRef.current = 'idle';
-            claudeNotifiedRef.current = true;
-            if (enabled && now - lastNotifyTimeRef.current >= NOTIFY_COOLDOWN) {
-              lastNotifyTimeRef.current = now;
+            // Distinct cooldown buckets so a 'stop' doesn't mute a later
+            // 'permission_request' (and vice-versa).
+            const category = event === 'stop' ? 'osc-stop' : 'osc-permission';
+            if (enabled && canNotify(category, now)) {
+              // Only record that we've notified when we actually fire, so a
+              // suppressed event can still be retried by the conv-idle path.
+              claudeNotifiedRef.current = true;
               const title = event === 'stop'
                 ? 'Claude finished'
                 : event === 'permission_request'
@@ -317,9 +343,8 @@ export default function TerminalView({ socket }: TerminalViewProps) {
         } catch {
           // ignore malformed
         }
-      } else if (enabled && now - lastNotifyTimeRef.current >= NOTIFY_COOLDOWN) {
+      } else if (enabled && canNotify('osc-plain', now)) {
         // Plain OSC 777 notification
-        lastNotifyTimeRef.current = now;
         addToast(rawTitle, rawBody);
         showBrowserNotification(rawTitle, rawBody);
         playSound();
@@ -331,6 +356,7 @@ export default function TerminalView({ socket }: TerminalViewProps) {
 
     return () => {
       window.removeEventListener('resize', onResize);
+      window.removeEventListener('orientationchange', onOrientationChange);
       scrollDisposable.dispose();
       bellDisposable.dispose();
       oscDisposable.dispose();
@@ -344,6 +370,26 @@ export default function TerminalView({ socket }: TerminalViewProps) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Session bootstrap: create() for a new session or attach() for an existing
+  // one. This is deliberately separate from xterm construction and depends on
+  // `socket` so it runs once the socket is actually connected — on a fresh
+  // page load/refresh the socket is null when the init effect runs, and
+  // create/attach early-return without it. A ref guards against double-firing
+  // if the socket reference changes.
+  useEffect(() => {
+    if (didBootstrapRef.current) return;
+    if (!socket) return;
+    const term = termRef.current;
+    if (!term) return;
+    didBootstrapRef.current = true;
+    if (isNewSession) {
+      create(term.cols, term.rows);
+    } else if (paramSessionId) {
+      attach(paramSessionId, term.cols, term.rows);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [socket]);
 
   // Toggle xterm keyboard capture based on rawMode
   useEffect(() => {
@@ -377,6 +423,13 @@ export default function TerminalView({ socket }: TerminalViewProps) {
     }
   }, [initialCmd]);
 
+  // Mirror the live sessionId into a ref so long-lived listeners (e.g. the
+  // conv-data handler, set up before the server assigns an id to a new
+  // session) always read the current value instead of a captured null.
+  useEffect(() => {
+    sessionIdRef.current = sessionId ?? null;
+  }, [sessionId]);
+
   // Once terminal sessionId is known, save or restore conv context
   useEffect(() => {
     if (!sessionId) return;
@@ -403,10 +456,14 @@ export default function TerminalView({ socket }: TerminalViewProps) {
 
     const handleConvData = (payload: ClaudeConvDataPayload) => {
       if (payload.agentId !== agentId) return;
-      // Lock onto the session ID once discovered (for new sessions without --resume)
+      // Lock onto the session ID once discovered (for new sessions without --resume).
+      // Read the terminal sessionId from the ref so a session that was 'new'
+      // when this listener was registered still gets the localStorage write
+      // once the server assigns it an id.
       if (payload.sessionId && !convClaudeSessionRef.current) {
         convClaudeSessionRef.current = payload.sessionId;
-        if (sessionId) localStorage.setItem(`conv-claude-session-${sessionId}`, payload.sessionId);
+        const sid = sessionIdRef.current;
+        if (sid) localStorage.setItem(`conv-claude-session-${sid}`, payload.sessionId);
       }
       if (payload.messages.length > 0) {
         setConvMessages((prev) => [...prev, ...payload.messages]);
@@ -440,10 +497,9 @@ export default function TerminalView({ socket }: TerminalViewProps) {
           const now = Date.now();
           const convIdle = now - lastConvMsgTimeRef.current > 8000;
           const outputIdle = now - lastTermOutputTimeRef.current > 5000;
-          if (convIdle && outputIdle && now - lastNotifyTimeRef.current >= NOTIFY_COOLDOWN) {
+          if (convIdle && outputIdle && canNotify('conv-idle', now)) {
             claudeNotifiedRef.current = true;
             claudeTurnRef.current = 'idle';
-            lastNotifyTimeRef.current = now;
             const title = 'Claude finished';
             const body = 'Task complete — ready for your next prompt';
             addToast(title, body);
@@ -572,21 +628,34 @@ export default function TerminalView({ socket }: TerminalViewProps) {
     []
   );
 
-  // Single top-level listener for FILES_DOWNLOAD_READY — covers downloads
-  // triggered from FileExplorer AND from chat file-link clicks, even when the
-  // explorer is closed.
+  // Listener for downloads THIS view initiated (chat file-link clicks). Matched
+  // strictly by our own requestIds so we don't also handle downloads owned by an
+  // embedded FileExplorer (which renders its own download cards).
   useEffect(() => {
     if (!socket) return;
     const onReady = (payload: FilesDownloadReadyPayload) => {
+      if (!payload.requestId || !downloadRequestIdsRef.current.has(payload.requestId)) return;
+      downloadRequestIdsRef.current.delete(payload.requestId);
       handleDownloadReady({
         fileName: payload.fileName,
         downloadUrl: payload.downloadUrl,
         size: payload.size,
       });
     };
+    const onError = (payload: FilesDownloadErrorPayload) => {
+      if (!payload.requestId || !downloadRequestIdsRef.current.has(payload.requestId)) return;
+      downloadRequestIdsRef.current.delete(payload.requestId);
+      const { addToast } = useNotificationStore.getState();
+      const where = payload.path ? ` (${payload.path})` : '';
+      addToast('Download failed', `${payload.error}${where}`);
+    };
     socket.on(FILES_DOWNLOAD_READY, onReady);
-    return () => { socket.off(FILES_DOWNLOAD_READY, onReady); };
-  }, [socket, handleDownloadReady]);
+    socket.on(FILES_DOWNLOAD_ERROR, onError);
+    return () => {
+      socket.off(FILES_DOWNLOAD_READY, onReady);
+      socket.off(FILES_DOWNLOAD_ERROR, onError);
+    };
+  }, [socket, agentId, handleDownloadReady]);
 
   const dismissDownload = useCallback((id: number) => {
     setDownloads((prev) => prev.filter((d) => d.id !== id));
@@ -596,7 +665,9 @@ export default function TerminalView({ socket }: TerminalViewProps) {
     (rawPath: string) => {
       if (!socket) return;
       const resolved = resolveFilePath(rawPath, convProjectRef.current);
-      socket.emit(FILES_DOWNLOAD, { agentId, path: resolved });
+      const requestId = crypto.randomUUID();
+      downloadRequestIdsRef.current.add(requestId);
+      socket.emit(FILES_DOWNLOAD, { agentId, path: resolved, requestId });
     },
     [socket, agentId]
   );

@@ -42,6 +42,10 @@ export default function ClaudeSessions({ socket, agentId, onClose }: ClaudeSessi
 
   useEffect(() => {
     if (!socket) return;
+    // Reset for the (possibly new) agent before requesting its list, so a
+    // machine switch shows a spinner instead of the previous machine's sessions.
+    setSessions([]);
+    setLoading(true);
     socket.emit(CLAUDE_SESSIONS_LIST, { agentId });
 
     const handleResult = (payload: ClaudeSessionsResultPayload) => {

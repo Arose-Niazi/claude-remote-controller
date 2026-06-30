@@ -9,26 +9,33 @@ const regKey = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run';
 async function uninstall() {
   console.log(`Removing "${TASK_NAME}"...`);
 
-  // Kill running agent processes
+  // Kill node processes running our agent script. taskkill /fi WINDOWTITLE and
+  // wmic are unreliable/removed on modern Windows, so query Win32_Process via
+  // CIM and match the agent's command line (built or source index.js path).
   try {
-    await execAsync('taskkill /f /fi "WINDOWTITLE eq CRC Agent" 2>nul', { shell: 'cmd.exe' });
-  } catch {
-    // Not running — fine
-  }
-
-  // Also kill node processes running our script
-  try {
-    const { stdout } = await execAsync('wmic process where "CommandLine like \'%crc%agent%index.js%\'" get ProcessId /format:list', { shell: 'cmd.exe' });
-    const pids = stdout.match(/ProcessId=(\d+)/g);
-    if (pids) {
-      for (const match of pids) {
-        const pid = match.split('=')[1];
-        try { await execAsync(`taskkill /f /pid ${pid}`, { shell: 'cmd.exe' }); } catch {}
-      }
+    const psScript = [
+      "$procs = Get-CimInstance Win32_Process |",
+      "  Where-Object {",
+      "    $_.Name -match 'node' -and $_.CommandLine -and",
+      "    $_.CommandLine -match 'index\\.js' -and",
+      "    ($_.CommandLine -match 'packages[\\\\/]agent' -or $_.CommandLine -match '[\\\\/]agent[\\\\/](dist|src)[\\\\/]index\\.js')",
+      "  };",
+      "foreach ($p in $procs) {",
+      "  try { Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop; Write-Output $p.ProcessId }",
+      "  catch { Write-Error $_ }",
+      "}",
+    ].join(' ');
+    const { stdout } = await execAsync(
+      `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "${psScript.replace(/"/g, '\\"')}"`,
+      { shell: 'powershell.exe' }
+    );
+    const killed = stdout.trim();
+    if (killed) {
       console.log('Stopped running agent.');
     }
-  } catch {
-    // No processes found
+  } catch (err: any) {
+    // No matching processes, or kill failed — log and continue with cleanup.
+    console.error('Could not stop running agent (it may not be running):', err.stderr || err.message);
   }
 
   // Remove registry entry

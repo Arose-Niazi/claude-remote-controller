@@ -19,14 +19,25 @@
 const EXCLUDED_EXTENSIONS = new Set(['com', 'org', 'net', 'io', 'co']); // common TLDs
 
 // Matches a path-looking string that contains at least one path separator and
-// ends with a dotted extension. Uses a top-level negative lookbehind to avoid
-// matching inside URLs (`https://…`), emails (`user@host/…`), or mid-word.
+// ends with a dotted extension.
 //
-// Alternatives for the optional leading prefix:
+// NOTE: we deliberately AVOID a negative lookbehind here — a top-level regex
+// literal beginning with `(?<!…)` throws a SyntaxError at module-parse time on
+// iOS Safari < 16.4, which blanks the whole app. The old leading boundary was
+// the lookbehind `(?<![A-Za-z0-9/\\:@.])`; we now reproduce it by inspecting
+// the character immediately before the match in code (see PATH_BOUNDARY_BEFORE
+// and the loop below) instead of in the pattern.
+//
+// Optional leading prefix on the path body:
 //   - [A-Za-z]:[\\/]  Windows drive letter, e.g. "C:\"
 //   - \.{1,2}[\\/]    Relative "./" or "../"
 //   - [\\/]           Bare leading "/" or "\"
-const PATH_REGEX = /(?<![A-Za-z0-9/\\:@.])(?:[A-Za-z]:[\\/]|\.{1,2}[\\/]|[\\/])?(?:[\w.\-]+[\\/])+[\w.\-]+\.[A-Za-z][A-Za-z0-9]{0,7}(?![A-Za-z0-9])/g;
+const PATH_REGEX = /(?:[A-Za-z]:[\\/]|\.{1,2}[\\/]|[\\/])?(?:[\w.\-]+[\\/])+[\w.\-]+\.[A-Za-z][A-Za-z0-9]{0,7}(?![A-Za-z0-9])/g;
+
+// The character preceding a path match must NOT be one of these (matches the
+// old negative-lookbehind class). If it is, the match started mid-token (inside
+// a URL, email, longer word, etc.) and is rejected.
+const PATH_BOUNDARY_BEFORE = /[A-Za-z0-9/\\:@.]/;
 
 export interface ParsedFragment {
   type: 'text' | 'path';
@@ -46,6 +57,15 @@ export function parseFilePathsInText(text: string): ParsedFragment[] {
     const path = m[0];
     const start = m.index;
     const end = start + path.length;
+
+    // Emulate the old negative lookbehind: reject a match whose preceding
+    // character is a word/path char (so we don't match mid-URL, mid-email, or
+    // mid-word). Re-scan from just after the start so a valid path beginning
+    // one char later can still be found.
+    if (start > 0 && PATH_BOUNDARY_BEFORE.test(text[start - 1])) {
+      PATH_REGEX.lastIndex = start + 1;
+      continue;
+    }
 
     // Skip URLs
     if (start >= 3 && text.slice(start - 3, start) === '://') continue;

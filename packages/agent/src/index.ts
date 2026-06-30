@@ -16,6 +16,7 @@ import {
   FILES_LIST_RESULT,
   FILES_DOWNLOAD,
   FILES_DOWNLOAD_READY,
+  FILES_DOWNLOAD_ERROR,
   VPN_LIST,
   VPN_CONNECT,
   VPN_DISCONNECT,
@@ -60,13 +61,28 @@ import {
   detachSession,
   attachSession,
   getAliveSessionIds,
+  reapDetachedSessions,
 } from './terminal-manager.js';
 
 const config = loadConfig();
 logger.info({ agentId: config.agentId, serverUrl: config.serverUrl }, 'Starting agent');
 
-// Auto-install Claude Code notification hooks (idempotent, version-checked)
-installClaudePlugin();
+// --- Process-level safety nets: keep the agent (and its PTYs) alive on unexpected errors ---
+process.on('unhandledRejection', (reason) => {
+  logger.error({ reason }, 'Unhandled promise rejection (agent kept alive)');
+});
+
+process.on('uncaughtException', (err) => {
+  logger.error({ error: err instanceof Error ? err.message : String(err) }, 'Uncaught exception (agent kept alive)');
+});
+
+// Auto-install Claude Code notification hooks (idempotent, version-checked).
+// The notify plugin is bash-only, so skip it on Windows.
+if (process.platform !== 'win32') {
+  installClaudePlugin();
+} else {
+  logger.info('Skipping Claude notify plugin install on Windows (requires bash)');
+}
 
 const socket = io(config.serverUrl + '/agent', {
   auth: { agentId: config.agentId, secret: config.secret },
@@ -98,6 +114,17 @@ setInterval(() => {
     socket.emit(AGENT_HEARTBEAT, buildHeartbeat(config.homeDir));
   }
 }, HEARTBEAT_INTERVAL);
+
+// --- Detached session reaper: kill PTYs that have been detached longer than 6 hours ---
+const SESSION_MAX_IDLE_MS = 6 * 60 * 60 * 1000;
+const reaperInterval = setInterval(() => {
+  const reaped = reapDetachedSessions(SESSION_MAX_IDLE_MS);
+  if (reaped.length > 0) {
+    logger.info({ sessionIds: reaped, count: reaped.length }, 'Reaped detached sessions');
+  }
+}, 60_000);
+// Don't let the reaper keep the process alive on its own.
+reaperInterval.unref();
 
 // --- Terminal event handlers ---
 socket.on(TERMINAL_OPEN, (payload: TerminalOpenPayload) => {
@@ -168,6 +195,7 @@ socket.on(FILES_DOWNLOAD, async (payload: FilesDownloadPayload) => {
   const result = await downloadFile(filePath, config.serverUrl, config.secret, config.agentId);
   if ('error' in result) {
     logger.error({ requestId, error: result.error }, 'File download failed');
+    socket.emit(FILES_DOWNLOAD_ERROR, { requestId, error: result.error });
     return;
   }
   socket.emit(FILES_DOWNLOAD_READY, {
@@ -219,27 +247,42 @@ socket.on(AGENT_EXEC, async (payload: AgentExecPayload) => {
 
 // --- Claude Conversation handler ---
 socket.on(CLAUDE_CONV_READ, async (payload: ClaudeConvReadPayload) => {
-  const result = await readConversation(payload.projectPath, payload.afterLine || 0, payload.sessionId);
-  if (result) {
-    socket.emit(CLAUDE_CONV_DATA, {
-      sessionId: result.sessionId,
-      messages: result.messages,
-      totalLines: result.totalLines,
-    });
-  } else {
+  try {
+    const result = await readConversation(payload.projectPath, payload.afterLine || 0, payload.sessionId);
+    if (result) {
+      socket.emit(CLAUDE_CONV_DATA, {
+        sessionId: result.sessionId,
+        messages: result.messages,
+        totalLines: result.totalLines,
+      });
+    } else {
+      socket.emit(CLAUDE_CONV_DATA, {
+        sessionId: '',
+        messages: [],
+        totalLines: 0,
+        error: 'No conversation found',
+      });
+    }
+  } catch (err: any) {
+    logger.error({ error: err?.message }, 'Failed to read conversation');
     socket.emit(CLAUDE_CONV_DATA, {
       sessionId: '',
       messages: [],
       totalLines: 0,
-      error: 'No conversation found',
+      error: err?.message || 'Failed to read conversation',
     });
   }
 });
 
 // --- Claude Sessions handler ---
 socket.on(CLAUDE_SESSIONS_LIST, async (payload: ClaudeSessionsListPayload) => {
-  const sessions = await listClaudeSessions(payload.projectPath);
-  socket.emit(CLAUDE_SESSIONS_RESULT, { sessions });
+  try {
+    const sessions = await listClaudeSessions(payload.projectPath);
+    socket.emit(CLAUDE_SESSIONS_RESULT, { sessions });
+  } catch (err: any) {
+    logger.error({ error: err?.message }, 'Failed to list Claude sessions');
+    socket.emit(CLAUDE_SESSIONS_RESULT, { sessions: [], error: err?.message || 'Failed to list sessions' });
+  }
 });
 
 // Graceful shutdown

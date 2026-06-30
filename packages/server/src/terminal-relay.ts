@@ -131,13 +131,42 @@ export function reconcileSessions(agentId: string, aliveIds: string[]): string[]
   return deadSessionIds;
 }
 
-export function markAgentSessionsDead(agentId: string): SessionEntry[] {
+/**
+ * Agent socket dropped: keep every session entry alive but mark it detached and
+ * forget the (now dead) agent socket, so a transient reconnect can re-adopt the
+ * still-running PTYs instead of orphaning them. Does NOT delete.
+ */
+export function detachAgentSessions(agentId: string): SessionEntry[] {
+  const affected: SessionEntry[] = [];
+  for (const entry of sessions.values()) {
+    if (entry.agentId === agentId) {
+      entry.status = 'detached';
+      entry.agentSocketId = '';
+      affected.push(entry);
+    }
+  }
+  if (affected.length > 0) {
+    logger.info({ agentId, count: affected.length }, 'Agent sessions detached (awaiting reconnect)');
+  }
+  return affected;
+}
+
+/**
+ * Agent gone for good (grace window elapsed without reconnect, or PTYs reported
+ * dead on reconnect): remove the entries and return them so attached clients can
+ * be notified.
+ */
+export function killAgentSessions(agentId: string): SessionEntry[] {
   const affected: SessionEntry[] = [];
   for (const [sessionId, entry] of sessions) {
     if (entry.agentId === agentId) {
       affected.push({ ...entry });
       sessions.delete(sessionId);
     }
+  }
+  sessionCounter.delete(agentId);
+  if (affected.length > 0) {
+    logger.info({ agentId, count: affected.length }, 'Agent sessions killed');
   }
   return affected;
 }
@@ -162,6 +191,11 @@ export function updateAgentSocketId(agentId: string, newSocketId: string): void 
   for (const entry of sessions.values()) {
     if (entry.agentId === agentId) {
       entry.agentSocketId = newSocketId;
+      // Revive detached sessions: a client that stayed connected is attached
+      // again; otherwise the session waits detached for a client to reattach.
+      if (entry.status === 'detached') {
+        entry.status = entry.clientSocketId ? 'attached' : 'detached';
+      }
     }
   }
 }

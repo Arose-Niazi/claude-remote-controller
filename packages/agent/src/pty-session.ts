@@ -1,7 +1,7 @@
 import * as pty from 'node-pty';
 import { writeFileSync, readFileSync, mkdirSync, existsSync } from 'fs';
 import { join } from 'path';
-import { tmpdir } from 'os';
+import { tmpdir, homedir } from 'os';
 import { SESSION_BUFFER_SIZE } from '@crc/shared';
 import { detectShell } from './shell.js';
 
@@ -70,12 +70,35 @@ function ensureInitFiles(): void {
   writeFileSync(versionFile, INIT_VERSION, 'utf-8');
 }
 
+// Resolve a working directory that actually exists on disk. node-pty throws
+// synchronously if `cwd` doesn't exist, and on Windows HOME may point to a
+// nonexistent POSIX path (Git-Bash/MSYS), so we validate each candidate and
+// fall back to the first that exists. On Windows USERPROFILE is preferred
+// over HOME.
+function resolveCwd(cwd?: string): string {
+  const candidates =
+    process.platform === 'win32'
+      ? [cwd, homedir(), process.env.USERPROFILE, process.env.HOME]
+      : [cwd, homedir(), process.env.HOME, process.env.USERPROFILE];
+  for (const c of candidates) {
+    if (c) {
+      try {
+        if (existsSync(c)) return c;
+      } catch {
+        /* try next candidate */
+      }
+    }
+  }
+  return homedir();
+}
+
 export class PtySession {
   id: string;
   private pty: pty.IPty;
   private buffer: string = '';
   private maxBufferSize = SESSION_BUFFER_SIZE;
   private _attached = true;
+  private _detachedAt = 0;
 
   constructor(id: string, cols: number, rows: number, shellPreference: string, cwd?: string) {
     this.id = id;
@@ -95,13 +118,28 @@ export class PtySession {
       env.ZDOTDIR = ZSH_DIR;
     }
 
-    this.pty = pty.spawn(shell, args, {
-      name: 'xterm-256color',
-      cols,
-      rows,
-      cwd: cwd || process.env.HOME || process.env.USERPROFILE || undefined,
-      env,
-    });
+    const resolvedCwd = resolveCwd(cwd);
+
+    try {
+      this.pty = pty.spawn(shell, args, {
+        name: 'xterm-256color',
+        cols,
+        rows,
+        cwd: resolvedCwd,
+        env,
+      });
+    } catch (err) {
+      // A bad cwd (or shell) can make node-pty throw synchronously. Retry once
+      // from the validated home directory before giving up.
+      console.error(`[pty] spawn failed (cwd=${resolvedCwd}):`, err);
+      this.pty = pty.spawn(shell, args, {
+        name: 'xterm-256color',
+        cols,
+        rows,
+        cwd: homedir(),
+        env,
+      });
+    }
   }
 
   write(data: string): void {
@@ -127,7 +165,20 @@ export class PtySession {
   appendToBuffer(data: string): void {
     this.buffer += data;
     if (this.buffer.length > this.maxBufferSize) {
-      this.buffer = this.buffer.slice(this.buffer.length - this.maxBufferSize);
+      let sliced = this.buffer.slice(this.buffer.length - this.maxBufferSize);
+      // The naive slice can cut mid-ANSI-escape or split a surrogate pair,
+      // corrupting replay. Advance the start to the next safe boundary: drop
+      // everything up to and including the first '\n', or up to (but not
+      // including) the first ESC, whichever comes first — so replay begins at
+      // a fresh line or a clean escape start.
+      const nl = sliced.indexOf('\n');
+      const esc = sliced.indexOf('\x1b');
+      if (nl !== -1 && (esc === -1 || nl < esc)) {
+        sliced = sliced.slice(nl + 1);
+      } else if (esc > 0) {
+        sliced = sliced.slice(esc);
+      }
+      this.buffer = sliced;
     }
   }
 
@@ -139,9 +190,15 @@ export class PtySession {
 
   setAttached(v: boolean): void {
     this._attached = v;
+    this._detachedAt = v ? 0 : Date.now();
   }
 
   isAttached(): boolean {
     return this._attached;
+  }
+
+  // Timestamp (ms) when this session was last detached, or 0 if attached.
+  getDetachedAt(): number {
+    return this._detachedAt;
   }
 }

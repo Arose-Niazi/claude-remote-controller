@@ -6,7 +6,12 @@ let swRegistration: ServiceWorkerRegistration | null = null;
 
 export function registerServiceWorker(): void {
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/sw.js').then((reg) => {
+    navigator.serviceWorker.register('/sw.js').then(() => {
+      // Wait until the SW is actually active before relying on it for
+      // notifications — register() resolves before activation, and
+      // showNotification() on an inactive registration rejects.
+      return navigator.serviceWorker.ready;
+    }).then((reg) => {
       swRegistration = reg;
     }).catch(() => { /* SW not available */ });
   }
@@ -25,24 +30,16 @@ export async function requestPermission(): Promise<NotificationPermission> {
 
 // ── Browser notification ────────────────────────────────────────────
 
-export function showBrowserNotification(title: string, body: string): void {
-  if (!isNotificationSupported() || Notification.permission !== 'granted') return;
+// A stable tag so successive alerts coalesce (a new notification replaces the
+// previous one of the same category) instead of stacking up.
+const NOTIFICATION_TAG = 'crc-notification';
 
-  // Prefer service worker notification (works in background on mobile)
-  if (swRegistration) {
-    swRegistration.showNotification(title, {
-      body,
-      icon: '/favicon.ico',
-      tag: 'crc-' + Date.now(),
-    }).catch(() => { /* fallback below */ });
-    return;
-  }
-
+function showFallbackNotification(title: string, body: string): void {
   // Fallback: regular Notification (foreground only on mobile)
   const n = new Notification(title, {
     body,
-    icon: '/favicon.ico',
-    tag: 'crc-' + Date.now(),
+    icon: '/icon-192.png',
+    tag: NOTIFICATION_TAG,
   });
 
   n.onclick = () => {
@@ -51,6 +48,39 @@ export function showBrowserNotification(title: string, body: string): void {
   };
 
   setTimeout(() => n.close(), 15_000);
+}
+
+export function showBrowserNotification(title: string, body: string): void {
+  if (!isNotificationSupported() || Notification.permission !== 'granted') return;
+
+  // Prefer service worker notification (works in background on mobile).
+  // If it rejects (inactive SW, etc.), fall back to a regular Notification.
+  if (swRegistration && swRegistration.active) {
+    swRegistration
+      .showNotification(title, {
+        body,
+        icon: '/icon-192.png',
+        tag: NOTIFICATION_TAG,
+      })
+      .then(() => {
+        // SW notifications don't auto-close; close any of ours after a delay so
+        // they don't linger indefinitely.
+        setTimeout(() => {
+          swRegistration
+            ?.getNotifications({ tag: NOTIFICATION_TAG })
+            .then((ns) => ns.forEach((n) => n.close()))
+            .catch(() => { /* ignore */ });
+        }, 15_000);
+      })
+      .catch(() => {
+        try {
+          showFallbackNotification(title, body);
+        } catch { /* notification unavailable */ }
+      });
+    return;
+  }
+
+  showFallbackNotification(title, body);
 }
 
 // ── Sound ───────────────────────────────────────────────────────────
@@ -81,11 +111,16 @@ export function playSound(): void {
 
 let titleFlashTimer: number | null = null;
 const originalTitle = document.title;
+// Teardown for the listeners/timer registered by the most recent flashTitle
+// call. Invoked at the start of the next call so we never leak a growing pile
+// of visibilitychange/focus listeners.
+let stopTitleFlash: (() => void) | null = null;
 
 export function flashTitle(message: string): void {
   if (document.hasFocus()) return;
 
-  if (titleFlashTimer) clearInterval(titleFlashTimer);
+  // Tear down any previous flash (timer + listeners) before starting a new one.
+  if (stopTitleFlash) stopTitleFlash();
 
   let show = true;
   titleFlashTimer = window.setInterval(() => {
@@ -101,7 +136,9 @@ export function flashTitle(message: string): void {
     document.title = originalTitle;
     document.removeEventListener('visibilitychange', stop);
     window.removeEventListener('focus', stop);
+    stopTitleFlash = null;
   };
+  stopTitleFlash = stop;
   document.addEventListener('visibilitychange', stop);
   window.addEventListener('focus', stop);
 }

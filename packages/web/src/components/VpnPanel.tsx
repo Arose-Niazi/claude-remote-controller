@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Socket } from 'socket.io-client';
 import { VPN_LIST, VPN_CONNECT, VPN_DISCONNECT, VPN_UPDATE } from '@crc/shared';
 import type { VpnProfile, VpnUpdatePayload } from '@crc/shared';
@@ -8,6 +8,10 @@ interface VpnPanelProps {
   agentId: string;
   onClose: () => void;
 }
+
+// If no VPN_UPDATE arrives within this window after an action, clear the
+// spinner and surface a timeout error so the button doesn't stick on "Working...".
+const ACTION_TIMEOUT_MS = 12_000;
 
 const typeLabels: Record<string, string> = {
   wireguard: 'WireGuard',
@@ -19,6 +23,15 @@ export default function VpnPanel({ socket, agentId, onClose }: VpnPanelProps) {
   const [profiles, setProfiles] = useState<VpnProfile[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const actionTimerRef = useRef<number | null>(null);
+
+  const clearActionTimer = () => {
+    if (actionTimerRef.current !== null) {
+      window.clearTimeout(actionTimerRef.current);
+      actionTimerRef.current = null;
+    }
+  };
 
   useEffect(() => {
     if (!socket) return;
@@ -29,22 +42,49 @@ export default function VpnPanel({ socket, agentId, onClose }: VpnPanelProps) {
         setProfiles(payload.profiles);
         setLoading(false);
         setActionLoading(null);
+        setActionError(null);
+        clearActionTimer();
       }
     };
 
+    // A dropped connection means we'll never get our VPN_UPDATE — clear the
+    // spinner so the button doesn't stick on "Working...".
+    const handleDisconnectSocket = () => {
+      setActionLoading(null);
+      clearActionTimer();
+      setActionError('Lost connection to the relay. Please retry.');
+    };
+
     socket.on(VPN_UPDATE, handleUpdate);
+    socket.on('disconnect', handleDisconnectSocket);
+    socket.on('connect_error', handleDisconnectSocket);
     return () => {
       socket.off(VPN_UPDATE, handleUpdate);
+      socket.off('disconnect', handleDisconnectSocket);
+      socket.off('connect_error', handleDisconnectSocket);
+      clearActionTimer();
     };
   }, [socket, agentId]);
 
-  function handleConnect(profileId: string) {
+  function startAction(profileId: string) {
     setActionLoading(profileId);
+    setActionError(null);
+    clearActionTimer();
+    actionTimerRef.current = window.setTimeout(() => {
+      // No VPN_UPDATE arrived in time — clear the spinner and surface a timeout.
+      setActionLoading((current) => (current === profileId ? null : current));
+      setActionError('VPN action timed out — the agent may be offline or busy. Please retry.');
+      actionTimerRef.current = null;
+    }, ACTION_TIMEOUT_MS);
+  }
+
+  function handleConnect(profileId: string) {
+    startAction(profileId);
     socket?.emit(VPN_CONNECT, { agentId, profileId });
   }
 
   function handleDisconnect(profileId: string) {
-    setActionLoading(profileId);
+    startAction(profileId);
     socket?.emit(VPN_DISCONNECT, { agentId, profileId });
   }
 
@@ -67,6 +107,12 @@ export default function VpnPanel({ socket, agentId, onClose }: VpnPanelProps) {
           {loading && (
             <div className="text-center text-text-muted text-sm py-6">
               Loading VPN profiles...
+            </div>
+          )}
+
+          {actionError && (
+            <div className="text-xs text-red-400 bg-red-500/10 rounded-lg p-2 break-words">
+              {actionError}
             </div>
           )}
 

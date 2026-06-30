@@ -11,6 +11,14 @@ interface AgentEntry {
 
 const agents = new Map<string, AgentEntry>();
 
+// Invoked whenever the agent list changes in a way clients should hear about
+// (currently: a heartbeat-timeout flipping an agent offline). index.ts wires
+// this to broadcastAgents so the change is pushed to connected clients.
+let agentsChangedListener: (() => void) | null = null;
+export function setAgentsChangedListener(cb: () => void): void {
+  agentsChangedListener = cb;
+}
+
 export function registerAgent(agentId: string, socketId: string): void {
   const existing = agents.get(agentId);
   if (existing) {
@@ -95,6 +103,9 @@ function createTimeout(agentId: string): NodeJS.Timeout {
     if (entry) {
       entry.info.status = 'offline';
       logger.warn({ agentId }, 'Agent heartbeat timeout');
+      // Push the offline status to clients — without this they keep showing the
+      // agent online on a half-open socket and open sessions that never respond.
+      agentsChangedListener?.();
     }
   }, HEARTBEAT_TIMEOUT);
 }

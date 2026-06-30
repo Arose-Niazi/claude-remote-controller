@@ -26,20 +26,33 @@ export interface AgentConfig {
 const CONFIG_DIR = path.join(os.homedir(), '.crc-agent');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
 
+function defaultConfig(): AgentConfig {
+  return {
+    agentId: os.hostname().toLowerCase().replace(/[^a-z0-9-]/g, '-'),
+    serverUrl: 'ws://localhost:3001',
+    secret: 'changeme',
+    shell: 'auto',
+  };
+}
+
 export function loadConfig(): AgentConfig {
   if (!fs.existsSync(CONFIG_FILE)) {
-    const defaultConfig: AgentConfig = {
-      agentId: os.hostname().toLowerCase().replace(/[^a-z0-9-]/g, '-'),
-      serverUrl: 'ws://localhost:3001',
-      secret: 'changeme',
-      shell: 'auto',
-    };
+    const config = defaultConfig();
     fs.mkdirSync(CONFIG_DIR, { recursive: true });
-    fs.writeFileSync(CONFIG_FILE, JSON.stringify(defaultConfig, null, 2));
+    fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2));
     console.log(`Created default config at ${CONFIG_FILE} — edit it and restart.`);
-    return defaultConfig;
+    return config;
   }
 
-  const raw = fs.readFileSync(CONFIG_FILE, 'utf-8');
-  return JSON.parse(raw) as AgentConfig;
+  try {
+    const raw = fs.readFileSync(CONFIG_FILE, 'utf-8');
+    // Strip a leading UTF-8 BOM (e.g., files saved by Windows Notepad) before parsing.
+    return JSON.parse(raw.replace(/^﻿/, '')) as AgentConfig;
+  } catch (err) {
+    console.error(
+      `Failed to read/parse config at ${CONFIG_FILE}: ${(err as Error).message}\n` +
+        'Falling back to default config. Fix the file and restart to apply your settings.'
+    );
+    return defaultConfig();
+  }
 }
