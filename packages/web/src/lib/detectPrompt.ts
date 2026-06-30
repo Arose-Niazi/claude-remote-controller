@@ -144,6 +144,29 @@ export function detectClaudePrompt(term: Terminal): DetectedPrompt | null {
 }
 
 /**
+ * Detect whether Claude Code is actively working (vs. idle / waiting for input).
+ *
+ * While Claude works it renders a live status line that always contains the
+ * phrase "esc to interrupt" (e.g. "✻ Cogitating… (12s · ↑ 1.2k tokens · esc to
+ * interrupt)"). When the turn finishes that line disappears and the input box
+ * returns. Scanning the recent buffer for that phrase is a reliable,
+ * cross-platform, version-stable signal that needs no shell hook — so it works
+ * on Windows agents where the bash notify plugin can't run.
+ */
+export function detectClaudeWorking(term: Terminal): boolean {
+  const buffer = term.buffer.active;
+  const cursorAbsY = buffer.baseY + buffer.cursorY;
+  const startY = Math.max(0, cursorAbsY - 24);
+  const endY = Math.min(buffer.length - 1, cursorAbsY + 2);
+  for (let y = startY; y <= endY; y++) {
+    const line = buffer.getLine(y);
+    if (!line) continue;
+    if (/esc to interrupt/i.test(line.translateToString(true))) return true;
+  }
+  return false;
+}
+
+/**
  * Build the keystrokes needed to select a specific option from the prompt.
  *
  * Claude Code prompts are navigated with arrow keys + Enter. Given the current

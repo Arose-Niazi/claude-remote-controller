@@ -30,6 +30,7 @@ import FileNotifications from './FileNotifications';
 import ChatView from './ChatView';
 import {
   detectClaudePrompt,
+  detectClaudeWorking,
   promptsEqual,
   buildPromptSelectionKeys,
   type DetectedPrompt,
@@ -95,24 +96,48 @@ export default function TerminalView({ socket }: TerminalViewProps) {
   const promptCheckTimerRef = useRef<number | null>(null);
   const [ttyScrolledUp, setTtyScrolledUp] = useState(false);
 
-  // Claude task completion detection
-  // Tracks: idle → user_sent → claude_active → (finished notification) → idle
-  const claudeTurnRef = useRef<'idle' | 'user_sent' | 'claude_active'>('idle');
-  const claudeNotifiedRef = useRef(false);
-  const lastConvMsgTimeRef = useRef(0);
-  const lastTermOutputTimeRef = useRef(0);
-  // Per-category cooldown: a category may not re-fire within 10s, but distinct
-  // categories (prompt / bell / osc-stop / osc-permission / conv-idle / osc-plain)
-  // never block each other.
+  // Claude completion detection, driven by the "esc to interrupt" working line
+  // in the terminal (cross-platform, needs no shell hook).
+  const claudeWorkingRef = useRef(false);
+  const doneTimerRef = useRef<number | null>(null);
+  // Last interactive-prompt question we alerted on, so the same prompt staying
+  // on screen (or its selection cursor moving) doesn't re-notify.
+  const lastPromptQuestionRef = useRef<string | null>(null);
+  // Per-category cooldown so the same kind of alert can't repeat within 10s,
+  // while distinct kinds (input vs done) never block each other.
   const NOTIFY_COOLDOWN = 10_000;
   const lastNotifyByCategoryRef = useRef<Map<string, number>>(new Map());
-  // Returns true when this category is allowed to notify (and records the time).
   const canNotify = useCallback((category: string, now = Date.now()) => {
-    const last = lastNotifyByCategoryRef.current.get(category) || 0;
+    const map = lastNotifyByCategoryRef.current;
+    const last = map.get(category) || 0;
     if (now - last < NOTIFY_COOLDOWN) return false;
-    lastNotifyByCategoryRef.current.set(category, now);
+    // Bound growth — keys can include per-question dedup keys over a long session.
+    if (map.size > 100) map.delete(map.keys().next().value as string);
+    map.set(category, now);
     return true;
   }, []);
+  // Central notification gate: always show a brief in-app toast, but only buzz
+  // the OS / play a sound / flash the title when the app is NOT focused — so we
+  // never interrupt the user while they're already watching the terminal.
+  const fireNotification = useCallback(
+    (title: string, body: string, category: string, dedupKey?: string) => {
+      const { enabled, addToast } = useNotificationStore.getState();
+      if (!enabled) return;
+      // dedupKey lets distinct prompts (different questions) each alert while the
+      // same one is still throttled; without it the whole category is throttled.
+      if (!canNotify(dedupKey ? `${category}:${dedupKey}` : category)) return;
+      addToast(title, body);
+      // Only buzz the OS / play a sound when the user isn't actively watching
+      // this tab (more reliable on mobile than hasFocus alone).
+      const watching = document.visibilityState === 'visible' && document.hasFocus();
+      if (!watching) {
+        showBrowserNotification(title, body);
+        playSound();
+        flashTitle(title);
+      }
+    },
+    [canNotify]
+  );
 
   const agent = agents.find((a) => a.id === agentId);
   const initialPath = agent?.homeDirectory || agent?.rootPaths?.[0] || '/';
@@ -128,11 +153,33 @@ export default function TerminalView({ socket }: TerminalViewProps) {
         terminalPromptRef.current = detected;
         setTerminalPrompt(detected);
       }
+
+      // Completion detection: watch Claude's "esc to interrupt" working line.
+      // When it disappears (turn ended), debounce briefly then notify — unless
+      // Claude resumed or a prompt is waiting for input (handled separately).
+      const wasWorking = claudeWorkingRef.current;
+      const working = detectClaudeWorking(term);
+      claudeWorkingRef.current = working;
+      if (working) {
+        if (doneTimerRef.current !== null) {
+          window.clearTimeout(doneTimerRef.current);
+          doneTimerRef.current = null;
+        }
+      } else if (wasWorking && doneTimerRef.current === null) {
+        doneTimerRef.current = window.setTimeout(() => {
+          doneTimerRef.current = null;
+          const t = termRef.current;
+          if (!t || detectClaudeWorking(t)) return; // Claude resumed
+          if (terminalPromptRef.current) return;     // a prompt is up
+          fireNotification('Claude finished', 'Ready for your next prompt', 'claude-done');
+        }, 3000);
+      }
+
       // Keep the scrolled-up indicator fresh on new output too
       const buf = term.buffer.active;
       setTtyScrolledUp(buf.viewportY < buf.baseY);
     }, 80);
-  }, []);
+  }, [fireNotification]);
 
   const {
     sessionId,
@@ -158,22 +205,25 @@ export default function TerminalView({ socket }: TerminalViewProps) {
     },
   });
 
-  // Notify when Claude shows a prompt (permission/selection question).
-  // Fires even in raw/no-conversation mode where claudeTurn stays 'idle' — a
-  // freshly detected prompt is enough on its own, subject to the per-category
-  // cooldown so we don't spam on every redraw.
+  // Notify when Claude shows an interactive prompt (permission / selection),
+  // once per distinct question so a moving selection cursor or redraw doesn't
+  // re-alert. Works in raw and chat mode alike.
   useEffect(() => {
-    if (!terminalPrompt) return;
-    const { enabled, addToast } = useNotificationStore.getState();
-    if (!enabled) return;
-    if (!canNotify('prompt')) return;
-    const title = 'Claude needs input';
-    const body = terminalPrompt.question || 'Waiting for your response';
-    addToast(title, body);
-    showBrowserNotification(title, body);
-    playSound();
-    flashTitle('Claude needs input');
-  }, [terminalPrompt, canNotify]);
+    if (!terminalPrompt) {
+      lastPromptQuestionRef.current = null;
+      return;
+    }
+    const question = terminalPrompt.question || 'Waiting for your response';
+    if (question === lastPromptQuestionRef.current) return;
+    lastPromptQuestionRef.current = question;
+    // A real prompt means Claude isn't "working" — cancel any pending done alert.
+    claudeWorkingRef.current = false;
+    if (doneTimerRef.current !== null) {
+      window.clearTimeout(doneTimerRef.current);
+      doneTimerRef.current = null;
+    }
+    fireNotification('Claude needs input', question, 'claude-input', question);
+  }, [terminalPrompt, fireNotification]);
 
   // Clear stale pending messages after 30 seconds
   useEffect(() => {
@@ -272,83 +322,34 @@ export default function TerminalView({ socket }: TerminalViewProps) {
       setTtyScrolledUp(buf.viewportY < buf.baseY);
     });
 
-    // Fire notification on terminal bell (BEL character \x07)
-    // Lets users do: long_command; echo -e '\a'
-    let lastBellTime = 0;
-    const bellDisposable = term.onBell(() => {
-      const now = Date.now();
-      if (now - lastBellTime < 2000) return;
-      lastBellTime = now;
-
-      const { enabled, addToast } = useNotificationStore.getState();
-      if (!enabled) return;
-      if (!canNotify('bell', now)) return;
-
-      const title = 'Terminal Bell';
-      const body = 'A command wants your attention';
-      addToast(title, body);
-      showBrowserNotification(title, body);
-      playSound();
-      flashTitle('Terminal Bell');
-    });
-
-    // Parse OSC 777 notifications from Claude Code hooks.
-    // Emitted by CRC plugin (crc://agent) or Warp plugin (warp://cli-agent).
+    // OSC 777 notifications from Claude Code hooks (Mac/Linux, where the bash
+    // notify plugin is installed). On Windows these never arrive — the working-
+    // line detector covers completion there instead. Routed through the same
+    // 'claude-done' / 'claude-input' categories so they don't double-fire with
+    // the terminal-based detectors.
     // Format: \033]777;notify;<prefix>;<JSON>\007
     const oscDisposable = term.parser.registerOscHandler(777, (data) => {
       const parts = data.split(';');
       if (parts[0] !== 'notify' || parts.length < 2) return false;
-
-      const { enabled, addToast } = useNotificationStore.getState();
       const rawTitle = parts[1] || '';
       const rawBody = parts.slice(2).join(';') || '';
-      const now = Date.now();
 
-      // Handle structured notifications from CRC or Warp plugins
       if (rawTitle === 'crc://agent' || rawTitle === 'warp://cli-agent') {
         try {
           const payload = JSON.parse(rawBody);
           const event = payload.event as string;
-
-          if (event === 'stop' || event === 'idle_prompt' || event === 'permission_request') {
-            // Mark Claude idle regardless of notification cooldown — this state
-            // transition must not be lost just because we suppress the toast.
-            claudeTurnRef.current = 'idle';
-            // Distinct cooldown buckets so a 'stop' doesn't mute a later
-            // 'permission_request' (and vice-versa).
-            const category = event === 'stop' ? 'osc-stop' : 'osc-permission';
-            if (enabled && canNotify(category, now)) {
-              // Only record that we've notified when we actually fire, so a
-              // suppressed event can still be retried by the conv-idle path.
-              claudeNotifiedRef.current = true;
-              const title = event === 'stop'
-                ? 'Claude finished'
-                : event === 'permission_request'
-                  ? 'Claude needs permission'
-                  : 'Claude needs input';
-              const body = event === 'stop'
-                ? (payload.query ? `"${payload.query}" — ${payload.response || 'done'}`.slice(0, 200) : 'Task complete')
-                : (payload.summary || 'Waiting for your response');
-              addToast(title, body);
-              showBrowserNotification(title, body);
-              playSound();
-              flashTitle(title);
-            }
-          } else if (event === 'prompt_submit') {
-            claudeTurnRef.current = 'user_sent';
-            claudeNotifiedRef.current = false;
-          } else if (event === 'tool_complete') {
-            claudeTurnRef.current = 'claude_active';
+          if (event === 'stop' || event === 'idle_prompt') {
+            fireNotification('Claude finished', 'Ready for your next prompt', 'claude-done');
           }
+          // permission_request is handled by the universal terminal prompt
+          // detector (so it works on Windows too and can't double-fire here).
+          // prompt_submit / tool_complete are informational — no alert.
         } catch {
           // ignore malformed
         }
-      } else if (enabled && canNotify('osc-plain', now)) {
-        // Plain OSC 777 notification
-        addToast(rawTitle, rawBody);
-        showBrowserNotification(rawTitle, rawBody);
-        playSound();
-        flashTitle(rawTitle);
+      } else {
+        // Generic OSC 777 notification from some other tool.
+        fireNotification(rawTitle, rawBody, 'osc-plain');
       }
 
       return true; // handled — suppress from terminal display
@@ -358,11 +359,14 @@ export default function TerminalView({ socket }: TerminalViewProps) {
       window.removeEventListener('resize', onResize);
       window.removeEventListener('orientationchange', onOrientationChange);
       scrollDisposable.dispose();
-      bellDisposable.dispose();
       oscDisposable.dispose();
       if (promptCheckTimerRef.current !== null) {
         window.clearTimeout(promptCheckTimerRef.current);
         promptCheckTimerRef.current = null;
+      }
+      if (doneTimerRef.current !== null) {
+        window.clearTimeout(doneTimerRef.current);
+        doneTimerRef.current = null;
       }
       term.dispose();
       termRef.current = null;
@@ -475,40 +479,9 @@ export default function TerminalView({ socket }: TerminalViewProps) {
           if (payload.messages.some((m) => m.type === 'assistant')) return [];
           return prev;
         });
-
-        // Claude task completion tracking: new messages arrived
-        lastConvMsgTimeRef.current = Date.now();
-        const hasClaudeActivity = payload.messages.some(
-          (m) => m.type === 'assistant' || m.type === 'tool_use' || m.type === 'tool_result'
-        );
-        if (hasClaudeActivity) {
-          claudeTurnRef.current = 'claude_active';
-          claudeNotifiedRef.current = false;
-        }
-      } else {
-        // No new messages — check if Claude has gone idle after being active
-        const { enabled, addToast } = useNotificationStore.getState();
-        if (
-          enabled &&
-          claudeTurnRef.current === 'claude_active' &&
-          !claudeNotifiedRef.current &&
-          !terminalPromptRef.current
-        ) {
-          const now = Date.now();
-          const convIdle = now - lastConvMsgTimeRef.current > 8000;
-          const outputIdle = now - lastTermOutputTimeRef.current > 5000;
-          if (convIdle && outputIdle && canNotify('conv-idle', now)) {
-            claudeNotifiedRef.current = true;
-            claudeTurnRef.current = 'idle';
-            const title = 'Claude finished';
-            const body = 'Task complete — ready for your next prompt';
-            addToast(title, body);
-            showBrowserNotification(title, body);
-            playSound();
-            flashTitle('Claude finished!');
-          }
-        }
       }
+      // Completion is detected from the terminal working line (see
+      // schedulePromptCheck), so no JSONL-idle heuristic is needed here.
       convLineRef.current = payload.totalLines;
     };
 
@@ -542,7 +515,6 @@ export default function TerminalView({ socket }: TerminalViewProps) {
     const handleOutput = (payload: { sessionId: string; data: string }) => {
       if (payload.sessionId === sessionId) {
         termRef.current?.write(payload.data, () => schedulePromptCheck());
-        lastTermOutputTimeRef.current = Date.now();
       }
     };
 
@@ -682,9 +654,8 @@ export default function TerminalView({ socket }: TerminalViewProps) {
       // prompt is still showing for any reason.
       terminalPromptRef.current = null;
       setTerminalPrompt(null);
-      // Responding to a prompt restarts Claude's work cycle
-      claudeTurnRef.current = 'user_sent';
-      claudeNotifiedRef.current = false;
+      // The prompt-notify effect resets lastPromptQuestionRef when the prompt
+      // clears, so the next distinct prompt will alert again.
     },
     [write]
   );
@@ -720,9 +691,6 @@ export default function TerminalView({ socket }: TerminalViewProps) {
     if (!composeText) return;
     if (convProjectRef.current) {
       setPendingSent((prev) => [...prev, composeText]);
-      // Mark start of a new Claude turn for completion detection
-      claudeTurnRef.current = 'user_sent';
-      claudeNotifiedRef.current = false;
     }
     // Send line by line to avoid PTY buffer overflow
     // Each line is typed, then \n to add newline, final \r to submit
