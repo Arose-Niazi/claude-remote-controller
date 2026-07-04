@@ -23,8 +23,10 @@ export function startLocalControl(
       });
       req.on('end', () => {
         try {
+          // Accept both our simplified shape ({event}) and Claude Code's native
+          // hook payload ({hook_event_name}); the caller normalizes it.
           const payload = JSON.parse(body) as ClaudeHookPayload;
-          if (payload && typeof payload.event === 'string') onHook(payload);
+          if (payload && typeof payload === 'object') onHook(payload);
         } catch {
           /* ignore malformed */
         }

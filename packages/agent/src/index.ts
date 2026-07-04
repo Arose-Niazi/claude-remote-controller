@@ -50,7 +50,7 @@ import {
 
 import { loadConfig, LOCAL_CONTROL_PORT } from './config.js';
 import { logger } from './logger.js';
-import { installClaudePlugin } from './claude-plugin-installer.js';
+import { installClaudeHooks, normalizeClaudeHook } from './claude-plugin-installer.js';
 import { startLocalControl } from './local-control.js';
 import { listTmuxSessions, buildTmuxLaunch } from './tmux.js';
 import { detectShell } from './shell.js';
@@ -84,9 +84,9 @@ process.on('uncaughtException', (err) => {
   logger.error({ error: err instanceof Error ? err.message : String(err) }, 'Uncaught exception (agent kept alive)');
 });
 
-// Auto-install Claude Code notification hooks (idempotent, version-checked).
+// Install Claude Code notify hooks into ~/.claude/settings.json (idempotent).
 // On Windows these run via Git Bash (when Git for Windows is installed).
-installClaudePlugin(LOCAL_CONTROL_PORT);
+installClaudeHooks(LOCAL_CONTROL_PORT);
 
 const socket = io(config.serverUrl + '/agent', {
   auth: { agentId: config.agentId, secret: config.secret },
@@ -134,8 +134,10 @@ reaperInterval.unref();
 //     when Claude runs in Warp/tmux, outside a CRC terminal) -> forward to the
 //     server, which sends Web Push + an in-app toast. Pure loopback HTTP, so it
 //     runs on every platform. ---
-startLocalControl(LOCAL_CONTROL_PORT, (payload: ClaudeHookPayload) => {
-  if (socket.connected) socket.emit(CLAUDE_HOOK, payload);
+startLocalControl(LOCAL_CONTROL_PORT, (raw: ClaudeHookPayload) => {
+  const payload = normalizeClaudeHook(raw);
+  logger.info({ rawEvent: (raw as any)?.hook_event_name || (raw as any)?.event, mapped: payload?.event || null }, 'Claude hook received');
+  if (payload && socket.connected) socket.emit(CLAUDE_HOOK, payload);
 });
 
 // --- Terminal event handlers ---
