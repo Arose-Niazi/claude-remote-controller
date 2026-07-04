@@ -136,7 +136,15 @@ reaperInterval.unref();
 //     runs on every platform. ---
 startLocalControl(LOCAL_CONTROL_PORT, (raw: ClaudeHookPayload) => {
   const payload = normalizeClaudeHook(raw);
-  logger.info({ rawEvent: (raw as any)?.hook_event_name || (raw as any)?.event, mapped: payload?.event || null }, 'Claude hook received');
+  logger.info(
+    {
+      rawEvent: (raw as any)?.hook_event_name || (raw as any)?.event,
+      mapped: payload?.event || null,
+      project: payload?.projectPath || null,
+      session: payload?.claudeSessionId ? 'yes' : 'no',
+    },
+    'Claude hook received'
+  );
   if (payload && socket.connected) socket.emit(CLAUDE_HOOK, payload);
 });
 
