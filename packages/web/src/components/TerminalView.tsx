@@ -14,7 +14,7 @@ import {
   FILES_DOWNLOAD_ERROR,
 } from '@crc/shared';
 import { useNotificationStore } from '../stores/notificationStore';
-import { showBrowserNotification, playSound, flashTitle } from '../lib/notify';
+import { showBrowserNotification, playSound, flashTitle, claudeDedup } from '../lib/notify';
 import type {
   ClaudeConvMessage,
   ClaudeConvDataPayload,
@@ -171,6 +171,8 @@ export default function TerminalView({ socket }: TerminalViewProps) {
           const t = termRef.current;
           if (!t || detectClaudeWorking(t)) return; // Claude resumed
           if (terminalPromptRef.current) return;     // a prompt is up
+          // Coalesce with the server hook broadcast (CLAUDE_NOTIFY) if it fired.
+          if (!claudeDedup('done')) return;
           fireNotification('Claude finished', 'Ready for your next prompt', 'claude-done');
         }, 3000);
       }
@@ -222,6 +224,9 @@ export default function TerminalView({ socket }: TerminalViewProps) {
       window.clearTimeout(doneTimerRef.current);
       doneTimerRef.current = null;
     }
+    // Coalesce with the server permission_request broadcast (short window so two
+    // genuinely different prompts still both alert).
+    if (!claudeDedup('input', 3000)) return;
     fireNotification('Claude needs input', question, 'claude-input', question);
   }, [terminalPrompt, fireNotification]);
 
@@ -339,7 +344,10 @@ export default function TerminalView({ socket }: TerminalViewProps) {
           const payload = JSON.parse(rawBody);
           const event = payload.event as string;
           if (event === 'stop' || event === 'idle_prompt') {
-            fireNotification('Claude finished', 'Ready for your next prompt', 'claude-done');
+            // Coalesce with the server hook broadcast + working-line detector.
+            if (claudeDedup('done')) {
+              fireNotification('Claude finished', 'Ready for your next prompt', 'claude-done');
+            }
           }
           // permission_request is handled by the universal terminal prompt
           // detector (so it works on Windows too and can't double-fire here).
@@ -388,7 +396,11 @@ export default function TerminalView({ socket }: TerminalViewProps) {
     if (!term) return;
     didBootstrapRef.current = true;
     if (isNewSession) {
-      create(term.cols, term.rows);
+      // ?tmux=<name>&launch=<cmd> creates/attaches a shared tmux session (mirrors
+      // what runs in Warp/tmux on the PC).
+      const tmux = searchParams.get('tmux') || undefined;
+      const launch = searchParams.get('launch') || undefined;
+      create(term.cols, term.rows, undefined, tmux ? { tmux, launch } : undefined);
     } else if (paramSessionId) {
       attach(paramSessionId, term.cols, term.rows);
     }

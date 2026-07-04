@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { useAuthStore } from '../stores/authStore';
 import { useNotificationStore } from '../stores/notificationStore';
 import { isNotificationSupported, requestPermission } from '../lib/notify';
+import { subscribeToPush, unsubscribeFromPush } from '../lib/push';
 import Toasts from './Toasts';
 
 interface LayoutProps {
@@ -11,29 +12,26 @@ interface LayoutProps {
 
 export default function Layout({ children, connected }: LayoutProps) {
   const logout = useAuthStore((s) => s.logout);
+  const token = useAuthStore((s) => s.token);
   const notifyEnabled = useNotificationStore((s) => s.enabled);
   const setNotifyEnabled = useNotificationStore((s) => s.setEnabled);
 
   const handleToggleNotifications = async () => {
     if (notifyEnabled) {
       setNotifyEnabled(false);
+      if (token) unsubscribeFromPush(token).catch(() => {});
       return;
     }
 
-    // Turning notifications on. In-app toasts always work; OS notifications
-    // additionally require the browser permission. Request it and only treat
-    // OS notifications as "granted" when the user actually allows them.
+    // Turning notifications on. In-app toasts always work; OS + push
+    // notifications additionally require the browser permission.
+    let granted = isNotificationSupported() && Notification.permission === 'granted';
     if (isNotificationSupported() && Notification.permission === 'default') {
-      const result = await requestPermission();
-      if (result !== 'granted') {
-        // Permission denied/dismissed: enable in-app toasts only.
-        setNotifyEnabled(true);
-        return;
-      }
+      granted = (await requestPermission()) === 'granted';
     }
-    // Either already granted, denied earlier, or notifications unsupported —
-    // enabling still turns on in-app toasts (and OS notifications when allowed).
     setNotifyEnabled(true);
+    // Register for real Web Push so alerts arrive even when the app is closed.
+    if (granted && token) subscribeToPush(token).catch(() => {});
   };
 
   // OS-level notifications are only actually delivered when the browser

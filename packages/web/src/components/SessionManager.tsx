@@ -7,6 +7,7 @@ import { useSessionStore } from '../stores/sessionStore';
 import VpnPanel from './VpnPanel';
 import ClaudeSessions from './ClaudeSessions';
 import FileExplorer from './FileExplorer';
+import TmuxPanel from './TmuxPanel';
 import { useAgentStore } from '../stores/agentStore';
 
 interface SessionManagerProps {
@@ -30,6 +31,7 @@ export default function SessionManager({ socket }: SessionManagerProps) {
   const [showVpn, setShowVpn] = useState(false);
   const [showClaude, setShowClaude] = useState(false);
   const [showBrowse, setShowBrowse] = useState(false);
+  const [showTmux, setShowTmux] = useState(false);
   const [permPrompt, setPermPrompt] = useState<{ path: string } | null>(null);
   const agents = useAgentStore((s) => s.agents);
   const agent = agents.find((a) => a.id === agentId);
@@ -102,6 +104,13 @@ export default function SessionManager({ socket }: SessionManagerProps) {
         </div>
         <div className="flex gap-2">
           <button
+            onClick={() => setShowTmux(true)}
+            className="px-3 py-1.5 text-sm bg-surface-raised hover:bg-surface-overlay border border-border text-text-secondary rounded-lg transition-colors"
+            title="Mirror a Warp/tmux session"
+          >
+            Warp
+          </button>
+          <button
             onClick={() => setShowBrowse(true)}
             className="px-3 py-1.5 text-sm bg-surface-raised hover:bg-surface-overlay border border-border text-text-secondary rounded-lg transition-colors"
           >
@@ -128,6 +137,10 @@ export default function SessionManager({ socket }: SessionManagerProps) {
 
       {showClaude && agentId && (
         <ClaudeSessions socket={socket} agentId={agentId} onClose={() => setShowClaude(false)} />
+      )}
+
+      {showTmux && agentId && (
+        <TmuxPanel socket={socket} agentId={agentId} onClose={() => setShowTmux(false)} />
       )}
 
       {showBrowse && agentId && (

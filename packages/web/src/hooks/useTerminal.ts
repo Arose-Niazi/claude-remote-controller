@@ -50,9 +50,16 @@ export function useTerminal({
   }, [onReady, onExit, onBuffer, onDetached]);
 
   const create = useCallback(
-    (cols: number, rows: number, name?: string) => {
+    (cols: number, rows: number, name?: string, opts?: { tmux?: string; launch?: string }) => {
       if (!socket) return;
-      socket.emit(SESSION_CREATE, { agentId, name, cols, rows });
+      socket.emit(SESSION_CREATE, {
+        agentId,
+        name,
+        cols,
+        rows,
+        tmux: opts?.tmux,
+        launch: opts?.launch,
+      });
     },
     [socket, agentId]
   );

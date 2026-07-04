@@ -83,6 +83,21 @@ export function showBrowserNotification(title: string, body: string): void {
   showFallbackNotification(title, body);
 }
 
+// ── Cross-source Claude-event dedup ─────────────────────────────────
+// Claude completion can be reported by BOTH the in-terminal working-line
+// detector AND the server's hook-driven CLAUDE_NOTIFY broadcast. This coalesces
+// them by kind ('done' / 'input') so only the first within the window notifies.
+let lastClaudeKey = '';
+let lastClaudeAt = 0;
+
+export function claudeDedup(kind: string, windowMs = 8000): boolean {
+  const now = Date.now();
+  if (kind === lastClaudeKey && now - lastClaudeAt < windowMs) return false;
+  lastClaudeKey = kind;
+  lastClaudeAt = now;
+  return true;
+}
+
 // ── Sound ───────────────────────────────────────────────────────────
 
 export function playSound(): void {

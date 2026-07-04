@@ -73,6 +73,19 @@ export const CLAUDE_SESSIONS_LIST = 'claude:sessions:list' as const;
 // Agent -> Server -> Client
 export const CLAUDE_SESSIONS_RESULT = 'claude:sessions:result' as const;
 
+// --- Claude hook events (from the agent's Claude Code hooks, fired even when
+// Claude runs outside a CRC terminal — e.g. in Warp/tmux) ---
+// Agent -> Server
+export const CLAUDE_HOOK = 'claude:hook' as const;
+// Server -> Client (in-app toast for connected clients; push covers closed apps)
+export const CLAUDE_NOTIFY = 'claude:notify' as const;
+
+// --- Shared tmux sessions (mirror what runs in Warp/tmux on the PC) ---
+// Client -> Server -> Agent
+export const TMUX_LIST = 'tmux:list' as const;
+// Agent -> Server -> Client
+export const TMUX_LIST_RESULT = 'tmux:list:result' as const;
+
 // --- Payload types ---
 export interface TerminalOutputPayload {
   sessionId: string;
@@ -91,6 +104,8 @@ export interface TerminalOpenPayload {
   agentId?: string;
   cols: number;
   rows: number;
+  tmux?: string;
+  launch?: string;
 }
 
 export interface TerminalInputPayload {
@@ -121,6 +136,11 @@ export interface SessionCreatePayload {
   name?: string;
   cols: number;
   rows: number;
+  // When set, the PTY attaches to (or creates) this tmux session instead of a
+  // plain shell — so the session is mirrored with Warp/tmux on the PC.
+  tmux?: string;
+  // Command to run if the tmux session is newly created (e.g. 'claude').
+  launch?: string;
 }
 
 export interface SessionAttachPayload {
@@ -234,6 +254,43 @@ export interface ClaudeSessionsListPayload {
 export interface ClaudeSessionsResultPayload {
   agentId?: string;
   sessions: import('./types.js').ClaudeSessionInfo[];
+  error?: string;
+}
+
+export interface ClaudeHookPayload {
+  agentId?: string;
+  event: string; // 'stop' | 'idle_prompt' | 'permission_request' | 'prompt_submit' | 'tool_complete'
+  query?: string;
+  response?: string;
+  summary?: string;
+  tool_name?: string;
+}
+
+export interface ClaudeNotifyPayload {
+  agentId?: string;
+  event: string;
+  title: string;
+  body: string;
+}
+
+// --- Shared tmux session payloads ---
+
+export interface TmuxSessionInfo {
+  name: string;
+  windows: number;
+  attached: boolean;
+  activity?: number; // last-activity unix seconds
+}
+
+export interface TmuxListPayload {
+  agentId?: string;
+  requestId?: string;
+}
+
+export interface TmuxListResultPayload {
+  requestId?: string;
+  agentId?: string;
+  sessions: TmuxSessionInfo[];
   error?: string;
 }
 

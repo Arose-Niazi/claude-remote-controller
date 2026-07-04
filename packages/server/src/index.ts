@@ -54,6 +54,10 @@ import {
   CLAUDE_SESSIONS_RESULT,
   CLAUDE_CONV_READ,
   CLAUDE_CONV_DATA,
+  CLAUDE_HOOK,
+  CLAUDE_NOTIFY,
+  TMUX_LIST,
+  TMUX_LIST_RESULT,
   AGENT_EXEC,
   AGENT_EXEC_RESULT,
   type FilesListPayload,
@@ -69,6 +73,9 @@ import {
   type ClaudeSessionsResultPayload,
   type ClaudeConvReadPayload,
   type ClaudeConvDataPayload,
+  type ClaudeHookPayload,
+  type TmuxListPayload,
+  type TmuxListResultPayload,
   type AgentExecPayload,
   type AgentExecResultPayload,
 } from '@crc/shared';
@@ -103,6 +110,8 @@ import { startCleanupInterval } from './file-store.js';
 import authRoutes from './routes/auth.routes.js';
 import agentRoutes from './routes/agent.routes.js';
 import fileRoutes from './routes/file.routes.js';
+import pushRoutes from './routes/push.routes.js';
+import { initPush, sendPush } from './push.js';
 
 const app = express();
 const httpServer = createServer(app);
@@ -171,6 +180,7 @@ app.use('/api/agents', (req, res, next) => {
 });
 app.use('/api/agents', agentRoutes);
 app.use('/api/files', fileRoutes);
+app.use('/api/push', pushRoutes);
 
 // Serve static web UI in production
 const publicDir = path.join(__dirname, 'public');
@@ -321,6 +331,23 @@ agentNs.on('connection', (socket) => {
     clientNs.emit(CLAUDE_CONV_DATA, { ...payload, agentId });
   });
 
+  // --- Claude hook events -> Web Push + in-app toast (works even when Claude
+  //     runs outside a CRC terminal, e.g. in Warp/tmux) ---
+  socket.on(CLAUDE_HOOK, (payload: ClaudeHookPayload) => {
+    const { title, body } = describeClaudeHook(payload);
+    if (!title) return; // prompt_submit / tool_complete are informational
+    clientNs.emit(CLAUDE_NOTIFY, { agentId, event: payload.event, title, body });
+    void sendPush({ title, body, tag: `claude-${payload.event}`, agentId });
+  });
+
+  // --- tmux session list relay (agent -> requesting client) ---
+  socket.on(TMUX_LIST_RESULT, (payload: TmuxListResultPayload) => {
+    const enriched = { ...payload, agentId };
+    const target = resolveRpc(payload.requestId);
+    if (target) clientNs.to(target).emit(TMUX_LIST_RESULT, enriched);
+    else clientNs.emit(TMUX_LIST_RESULT, enriched);
+  });
+
   // --- Agent exec relay (agent -> client) ---
   socket.on(AGENT_EXEC_RESULT, (payload: AgentExecResultPayload) => {
     const enriched = { ...payload, agentId };
@@ -398,7 +425,7 @@ clientNs.on('connection', (socket) => {
   });
 
   socket.on(SESSION_CREATE, (payload: SessionCreatePayload) => {
-    const { agentId, name, cols, rows } = payload;
+    const { agentId, name, cols, rows, tmux, launch } = payload;
     const agentSocketId = getAgentSocketId(agentId);
     if (!agentSocketId) {
       socket.emit(SESSION_DETACHED, { sessionId: '', reason: 'agent offline' });
@@ -412,7 +439,7 @@ clientNs.on('connection', (socket) => {
       return;
     }
 
-    agentNs.to(agentSocketId).emit(TERMINAL_OPEN, { sessionId, cols, rows });
+    agentNs.to(agentSocketId).emit(TERMINAL_OPEN, { sessionId, cols, rows, tmux, launch });
     socket.emit(TERMINAL_READY, { sessionId });
     broadcastSessionsForAgent(agentId);
   });
@@ -528,6 +555,17 @@ clientNs.on('connection', (socket) => {
     agentNs.to(agentSocketId).emit(AGENT_EXEC, { requestId: rid, command, cwd });
   });
 
+  // --- tmux session list (client -> agent) ---
+  socket.on(TMUX_LIST, (payload: TmuxListPayload) => {
+    const { agentId, requestId } = payload;
+    if (!agentId) return;
+    const agentSocketId = getAgentSocketId(agentId);
+    if (!agentSocketId) return;
+    const rid = requestId || uuid();
+    trackRpc(rid, socket.id);
+    agentNs.to(agentSocketId).emit(TMUX_LIST, { requestId: rid });
+  });
+
   // --- File explorer relay (client -> agent) ---
   socket.on(FILES_LIST, (payload: FilesListPayload) => {
     const { agentId, path: dirPath, requestId } = payload;
@@ -576,6 +614,32 @@ clientNs.on('connection', (socket) => {
   });
 });
 
+function trunc(s: string, n: number): string {
+  return s.length > n ? s.slice(0, n - 1) + '…' : s;
+}
+
+// Map a raw Claude hook event to a user-facing title/body. Returns an empty
+// title for informational events that should not notify.
+function describeClaudeHook(p: ClaudeHookPayload): { title: string; body: string } {
+  switch (p.event) {
+    case 'stop':
+      return {
+        title: 'Claude finished',
+        body: p.query
+          ? `"${trunc(p.query, 70)}" — ${trunc(p.response || 'done', 120)}`
+          : p.response
+            ? trunc(p.response, 180)
+            : 'Task complete — ready for your next prompt',
+      };
+    case 'idle_prompt':
+      return { title: 'Claude is waiting', body: p.summary || 'Ready for your next prompt' };
+    case 'permission_request':
+      return { title: 'Claude needs permission', body: p.summary || 'Waiting for your approval' };
+    default:
+      return { title: '', body: '' };
+  }
+}
+
 function broadcastAgents(): void {
   clientNs.emit(AGENTS_UPDATE, getAgentList());
 }
@@ -588,6 +652,7 @@ function broadcastSessionsForAgent(agentId: string): void {
 // Push agent-list changes that originate inside the registry (heartbeat timeout).
 setAgentsChangedListener(broadcastAgents);
 startCleanupInterval();
+initPush();
 
 httpServer.listen(config.port, () => {
   logger.info({ port: config.port }, 'CRC server started');

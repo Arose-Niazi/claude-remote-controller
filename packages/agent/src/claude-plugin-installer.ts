@@ -3,7 +3,7 @@ import { join } from 'path';
 import { logger } from './logger.js';
 
 const PLUGIN_NAME = 'remote-notify';
-const PLUGIN_VERSION = '1.0.0';
+const PLUGIN_VERSION = '1.1.0';
 const MARKETPLACE_KEY = 'crc';
 const REGISTRY_KEY = `${PLUGIN_NAME}@${MARKETPLACE_KEY}`;
 
@@ -39,10 +39,16 @@ const HOOKS_JSON = JSON.stringify({
   },
 }, null, 2);
 
-// Shared notify helper — writes an OSC 777 sequence to /dev/tty
-const NOTIFY_SH = `#!/bin/bash
-printf '\\033]777;notify;crc://agent;%s\\007' "$1" > /dev/tty 2>/dev/null || true
+// Shared notify helper — writes an OSC 777 sequence to /dev/tty (for an attached
+// terminal) AND POSTs to the local CRC agent (so events reach Web Push even when
+// Claude runs outside a CRC terminal, e.g. in Warp/tmux).
+function notifyShContent(port: number): string {
+  return `#!/bin/bash
+BODY="$1"
+printf '\\033]777;notify;crc://agent;%s\\007' "$BODY" > /dev/tty 2>/dev/null || true
+curl -s -m 2 -X POST -H 'Content-Type: application/json' --data-binary "$BODY" "http://127.0.0.1:${port}/hook" >/dev/null 2>&1 || true
 `;
+}
 
 const ON_STOP_SH = `#!/bin/bash
 SCRIPT_DIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
@@ -197,7 +203,7 @@ function isRegistryCurrent(installPath: string): boolean {
   }
 }
 
-export function installClaudePlugin(): void {
+export function installClaudePlugin(localControlPort: number): void {
   // Hooks are bash/jq/dev-tty only — they cannot run on Windows.
   if (process.platform === 'win32') {
     logger.info('Skipping CRC Claude Code plugin install on Windows (hooks require bash/jq/dev-tty)');
@@ -230,7 +236,7 @@ export function installClaudePlugin(): void {
     writeFileSync(join(pluginDir, '.claude-plugin', 'plugin.json'), PLUGIN_JSON, 'utf-8');
     writeFileSync(join(pluginDir, 'hooks', 'hooks.json'), HOOKS_JSON, 'utf-8');
 
-    writeScript(join(pluginDir, 'scripts'), 'notify.sh', NOTIFY_SH);
+    writeScript(join(pluginDir, 'scripts'), 'notify.sh', notifyShContent(localControlPort));
     writeScript(join(pluginDir, 'scripts'), 'on-stop.sh', ON_STOP_SH);
     writeScript(join(pluginDir, 'scripts'), 'on-notification.sh', ON_NOTIFICATION_SH);
     writeScript(join(pluginDir, 'scripts'), 'on-permission-request.sh', ON_PERMISSION_REQUEST_SH);

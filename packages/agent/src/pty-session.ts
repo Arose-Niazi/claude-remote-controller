@@ -100,22 +100,34 @@ export class PtySession {
   private _attached = true;
   private _detachedAt = 0;
 
-  constructor(id: string, cols: number, rows: number, shellPreference: string, cwd?: string) {
+  constructor(
+    id: string,
+    cols: number,
+    rows: number,
+    shellPreference: string,
+    cwd?: string,
+    command?: string
+  ) {
     this.id = id;
     const shell = detectShell(shellPreference);
     const isBash = /bash(\.exe)?$/.test(shell);
     const isZsh = /zsh(\.exe)?$/.test(shell);
 
-    ensureInitFiles();
-
-    const args: string[] = [];
     const env: Record<string, string> = { ...process.env, TERM: 'xterm-256color' } as Record<string, string>;
+    const args: string[] = [];
 
-    if (isBash) {
-      args.push('--rcfile', BASH_INIT);
-    } else if (isZsh) {
-      env.ZDOTDIR_ORIG = process.env.ZDOTDIR || process.env.HOME || '';
-      env.ZDOTDIR = ZSH_DIR;
+    if (command) {
+      // Run a one-off command in a login shell (used to attach a tmux session).
+      // No shell-integration rcfile — the command owns the session.
+      args.push('-l', '-c', command);
+    } else {
+      ensureInitFiles();
+      if (isBash) {
+        args.push('--rcfile', BASH_INIT);
+      } else if (isZsh) {
+        env.ZDOTDIR_ORIG = process.env.ZDOTDIR || process.env.HOME || '';
+        env.ZDOTDIR = ZSH_DIR;
+      }
     }
 
     const resolvedCwd = resolveCwd(cwd);

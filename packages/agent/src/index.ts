@@ -25,6 +25,9 @@ import {
   CLAUDE_SESSIONS_RESULT,
   CLAUDE_CONV_READ,
   CLAUDE_CONV_DATA,
+  CLAUDE_HOOK,
+  TMUX_LIST,
+  TMUX_LIST_RESULT,
   AGENT_EXEC,
   AGENT_EXEC_RESULT,
   HEARTBEAT_INTERVAL,
@@ -40,12 +43,16 @@ import {
   type VpnDisconnectPayload,
   type ClaudeSessionsListPayload,
   type ClaudeConvReadPayload,
+  type ClaudeHookPayload,
+  type TmuxListPayload,
   type AgentExecPayload,
 } from '@crc/shared';
 
-import { loadConfig } from './config.js';
+import { loadConfig, LOCAL_CONTROL_PORT } from './config.js';
 import { logger } from './logger.js';
 import { installClaudePlugin } from './claude-plugin-installer.js';
+import { startLocalControl } from './local-control.js';
+import { listTmuxSessions, buildTmuxAttachCommand } from './tmux.js';
 import { buildHeartbeat } from './heartbeat.js';
 import { listDirectory, downloadFile } from './file-explorer.js';
 import { getProfiles, connectVpn, disconnectVpn } from './vpn-manager.js';
@@ -79,7 +86,7 @@ process.on('uncaughtException', (err) => {
 // Auto-install Claude Code notification hooks (idempotent, version-checked).
 // The notify plugin is bash-only, so skip it on Windows.
 if (process.platform !== 'win32') {
-  installClaudePlugin();
+  installClaudePlugin(LOCAL_CONTROL_PORT);
 } else {
   logger.info('Skipping Claude notify plugin install on Windows (requires bash)');
 }
@@ -126,10 +133,24 @@ const reaperInterval = setInterval(() => {
 // Don't let the reaper keep the process alive on its own.
 reaperInterval.unref();
 
+// --- Local control endpoint: Claude Code notify hooks POST here (works even
+//     when Claude runs in Warp/tmux, outside a CRC terminal) -> forward to the
+//     server, which sends Web Push + an in-app toast. ---
+if (process.platform !== 'win32') {
+  startLocalControl(LOCAL_CONTROL_PORT, (payload: ClaudeHookPayload) => {
+    if (socket.connected) socket.emit(CLAUDE_HOOK, payload);
+  });
+}
+
 // --- Terminal event handlers ---
 socket.on(TERMINAL_OPEN, (payload: TerminalOpenPayload) => {
-  const { sessionId, cols, rows } = payload;
+  const { sessionId, cols, rows, tmux, launch } = payload;
   if (!sessionId) return;
+
+  // If a tmux session was requested, run a login shell that attaches (or
+  // creates) it, so the session is shared with Warp/tmux on the PC.
+  const command =
+    tmux && process.platform !== 'win32' ? buildTmuxAttachCommand(tmux, launch) : undefined;
 
   createTerminalSession(
     sessionId,
@@ -142,8 +163,21 @@ socket.on(TERMINAL_OPEN, (payload: TerminalOpenPayload) => {
     },
     (sid, exitCode) => {
       socket.emit(TERMINAL_EXIT, { sessionId: sid, exitCode });
-    }
+    },
+    command
   );
+});
+
+// --- tmux session list ---
+socket.on(TMUX_LIST, async (payload: TmuxListPayload) => {
+  const { requestId } = payload;
+  if (!requestId) return;
+  try {
+    const sessions = await listTmuxSessions();
+    socket.emit(TMUX_LIST_RESULT, { requestId, sessions });
+  } catch (err: any) {
+    socket.emit(TMUX_LIST_RESULT, { requestId, sessions: [], error: err?.message || 'tmux list failed' });
+  }
 });
 
 socket.on(TERMINAL_INPUT, (payload: TerminalInputPayload) => {

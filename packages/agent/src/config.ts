@@ -26,6 +26,10 @@ export interface AgentConfig {
 const CONFIG_DIR = path.join(os.homedir(), '.crc-agent');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
 
+// Loopback port the agent listens on for Claude Code hook callbacks (so events
+// fired while Claude runs in Warp/tmux reach the agent -> server -> push).
+export const LOCAL_CONTROL_PORT = Number(process.env.CRC_LOCAL_PORT) || 47600;
+
 function defaultConfig(): AgentConfig {
   return {
     agentId: os.hostname().toLowerCase().replace(/[^a-z0-9-]/g, '-'),

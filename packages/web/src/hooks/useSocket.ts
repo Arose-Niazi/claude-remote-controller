@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Socket } from 'socket.io-client';
-import { AGENTS_UPDATE, SESSIONS_UPDATE, TERMINAL_EXIT } from '@crc/shared';
-import type { AgentInfo, TerminalSession, TerminalExitPayload } from '@crc/shared';
+import { AGENTS_UPDATE, SESSIONS_UPDATE, TERMINAL_EXIT, CLAUDE_NOTIFY } from '@crc/shared';
+import type { AgentInfo, TerminalSession, TerminalExitPayload, ClaudeNotifyPayload } from '@crc/shared';
 import { getSocket, disconnectSocket } from '../api/socket';
 import { useAuthStore } from '../stores/authStore';
 import { useAgentStore } from '../stores/agentStore';
 import { useSessionStore } from '../stores/sessionStore';
 import { useNotificationStore } from '../stores/notificationStore';
-import { showBrowserNotification, playSound, flashTitle } from '../lib/notify';
+import { showBrowserNotification, playSound, flashTitle, claudeDedup } from '../lib/notify';
 
 export function useSocket(): { socket: Socket | null; connected: boolean } {
   const token = useAuthStore((s) => s.token);
@@ -58,6 +58,18 @@ export function useSocket(): { socket: Socket | null; connected: boolean } {
       flashTitle('Session ended!');
     });
 
+    // Claude hook events forwarded from the agent (fire even when Claude runs in
+    // Warp/tmux). In-app toast here; the OS/push alert is delivered by the
+    // service worker's push handler when the app isn't focused.
+    socket.on(CLAUDE_NOTIFY, (payload: ClaudeNotifyPayload) => {
+      const { enabled, addToast } = useNotificationStore.getState();
+      if (!enabled) return;
+      // Coalesce with the in-terminal detectors so we don't double-toast.
+      const kind = payload.event === 'permission_request' ? 'input' : 'done';
+      if (!claudeDedup(kind, kind === 'input' ? 3000 : 8000)) return;
+      addToast(payload.title, payload.body);
+    });
+
     return () => {
       socket.off('connect');
       socket.off('disconnect');
@@ -65,6 +77,7 @@ export function useSocket(): { socket: Socket | null; connected: boolean } {
       socket.off(AGENTS_UPDATE);
       socket.off(SESSIONS_UPDATE);
       socket.off(TERMINAL_EXIT);
+      socket.off(CLAUDE_NOTIFY);
       // Disconnect (not just remove listeners) so StrictMode mount/unmount
       // cycles don't leak a live socket connection.
       disconnectSocket();
