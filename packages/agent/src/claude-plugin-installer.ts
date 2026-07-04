@@ -204,12 +204,10 @@ function isRegistryCurrent(installPath: string): boolean {
 }
 
 export function installClaudePlugin(localControlPort: number): void {
-  // Hooks are bash/jq/dev-tty only — they cannot run on Windows.
-  if (process.platform === 'win32') {
-    logger.info('Skipping CRC Claude Code plugin install on Windows (hooks require bash/jq/dev-tty)');
-    return;
-  }
-
+  // Hooks are bash scripts. On Windows, Claude Code runs command hooks via Git
+  // Bash when Git for Windows is installed, so they still work there; if bash
+  // isn't available they simply never fire (harmless). curl is used to reach the
+  // local agent endpoint, and jq (optional) enriches the payload when present.
   const pluginDir = getPluginDir();
 
   // Fully skip only when BOTH the on-disk files AND the registry entry are current.

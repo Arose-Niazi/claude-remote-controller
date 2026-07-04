@@ -52,7 +52,8 @@ import { loadConfig, LOCAL_CONTROL_PORT } from './config.js';
 import { logger } from './logger.js';
 import { installClaudePlugin } from './claude-plugin-installer.js';
 import { startLocalControl } from './local-control.js';
-import { listTmuxSessions, buildTmuxAttachCommand } from './tmux.js';
+import { listTmuxSessions, buildTmuxLaunch } from './tmux.js';
+import { detectShell } from './shell.js';
 import { buildHeartbeat } from './heartbeat.js';
 import { listDirectory, downloadFile } from './file-explorer.js';
 import { getProfiles, connectVpn, disconnectVpn } from './vpn-manager.js';
@@ -84,12 +85,8 @@ process.on('uncaughtException', (err) => {
 });
 
 // Auto-install Claude Code notification hooks (idempotent, version-checked).
-// The notify plugin is bash-only, so skip it on Windows.
-if (process.platform !== 'win32') {
-  installClaudePlugin(LOCAL_CONTROL_PORT);
-} else {
-  logger.info('Skipping Claude notify plugin install on Windows (requires bash)');
-}
+// On Windows these run via Git Bash (when Git for Windows is installed).
+installClaudePlugin(LOCAL_CONTROL_PORT);
 
 const socket = io(config.serverUrl + '/agent', {
   auth: { agentId: config.agentId, secret: config.secret },
@@ -135,22 +132,20 @@ reaperInterval.unref();
 
 // --- Local control endpoint: Claude Code notify hooks POST here (works even
 //     when Claude runs in Warp/tmux, outside a CRC terminal) -> forward to the
-//     server, which sends Web Push + an in-app toast. ---
-if (process.platform !== 'win32') {
-  startLocalControl(LOCAL_CONTROL_PORT, (payload: ClaudeHookPayload) => {
-    if (socket.connected) socket.emit(CLAUDE_HOOK, payload);
-  });
-}
+//     server, which sends Web Push + an in-app toast. Pure loopback HTTP, so it
+//     runs on every platform. ---
+startLocalControl(LOCAL_CONTROL_PORT, (payload: ClaudeHookPayload) => {
+  if (socket.connected) socket.emit(CLAUDE_HOOK, payload);
+});
 
 // --- Terminal event handlers ---
 socket.on(TERMINAL_OPEN, (payload: TerminalOpenPayload) => {
   const { sessionId, cols, rows, tmux, launch } = payload;
   if (!sessionId) return;
 
-  // If a tmux session was requested, run a login shell that attaches (or
-  // creates) it, so the session is shared with Warp/tmux on the PC.
-  const command =
-    tmux && process.platform !== 'win32' ? buildTmuxAttachCommand(tmux, launch) : undefined;
+  // If a tmux session was requested, attach (or create) it so the session is
+  // shared with Warp/tmux on the PC (via WSL on Windows, native tmux elsewhere).
+  const launchSpec = tmux ? buildTmuxLaunch(tmux, launch, detectShell(config.shell)) : undefined;
 
   createTerminalSession(
     sessionId,
@@ -164,7 +159,7 @@ socket.on(TERMINAL_OPEN, (payload: TerminalOpenPayload) => {
     (sid, exitCode) => {
       socket.emit(TERMINAL_EXIT, { sessionId: sid, exitCode });
     },
-    command
+    launchSpec
   );
 });
 

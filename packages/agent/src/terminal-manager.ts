@@ -11,9 +11,9 @@ export function createTerminalSession(
   cwd: string | undefined,
   onData: (sessionId: string, data: string) => void,
   onExit: (sessionId: string, exitCode: number) => void,
-  command?: string
+  launch?: { file: string; args: string[] }
 ): void {
-  const session = new PtySession(sessionId, cols, rows, shellPreference, cwd, command);
+  const session = new PtySession(sessionId, cols, rows, shellPreference, cwd, launch);
 
   session.onData((data) => {
     session.appendToBuffer(data);

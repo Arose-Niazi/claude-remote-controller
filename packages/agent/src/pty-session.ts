@@ -106,7 +106,7 @@ export class PtySession {
     rows: number,
     shellPreference: string,
     cwd?: string,
-    command?: string
+    launch?: { file: string; args: string[] }
   ) {
     this.id = id;
     const shell = detectShell(shellPreference);
@@ -114,12 +114,14 @@ export class PtySession {
     const isZsh = /zsh(\.exe)?$/.test(shell);
 
     const env: Record<string, string> = { ...process.env, TERM: 'xterm-256color' } as Record<string, string>;
-    const args: string[] = [];
 
-    if (command) {
-      // Run a one-off command in a login shell (used to attach a tmux session).
-      // No shell-integration rcfile — the command owns the session.
-      args.push('-l', '-c', command);
+    // A launch spec (e.g. attaching a tmux session) is spawned directly — no
+    // shell-integration rcfile, it owns the session. Otherwise spawn the shell.
+    let file = shell;
+    const args: string[] = [];
+    if (launch) {
+      file = launch.file;
+      args.push(...launch.args);
     } else {
       ensureInitFiles();
       if (isBash) {
@@ -133,7 +135,7 @@ export class PtySession {
     const resolvedCwd = resolveCwd(cwd);
 
     try {
-      this.pty = pty.spawn(shell, args, {
+      this.pty = pty.spawn(file, args, {
         name: 'xterm-256color',
         cols,
         rows,
@@ -141,10 +143,10 @@ export class PtySession {
         env,
       });
     } catch (err) {
-      // A bad cwd (or shell) can make node-pty throw synchronously. Retry once
-      // from the validated home directory before giving up.
-      console.error(`[pty] spawn failed (cwd=${resolvedCwd}):`, err);
-      this.pty = pty.spawn(shell, args, {
+      // A bad cwd (or spawn target) can make node-pty throw synchronously. Retry
+      // once from the validated home directory before giving up.
+      console.error(`[pty] spawn failed (file=${file}, cwd=${resolvedCwd}):`, err);
+      this.pty = pty.spawn(file, args, {
         name: 'xterm-256color',
         cols,
         rows,
