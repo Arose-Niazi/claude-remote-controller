@@ -60,6 +60,7 @@ export function showBrowserNotification(title: string, body: string): void {
       .showNotification(title, {
         body,
         icon: '/icon-192.png',
+        badge: '/badge-96.png',
         tag: NOTIFICATION_TAG,
       })
       .then(() => {
