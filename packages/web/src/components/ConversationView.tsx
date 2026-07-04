@@ -9,10 +9,12 @@ interface ConversationViewProps {
   socket: Socket | null;
 }
 
+type Status = 'loading' | 'ready' | 'error';
+
 /**
- * Read-only viewer for a Claude conversation transcript — used when a completion
- * notification is tapped. Reads the JSONL via the agent (no new claude process),
- * so you can see what Claude did even though it ran in Warp on the PC.
+ * Read-only viewer for a Claude conversation transcript — opened when a
+ * completion notification is tapped. Reads the JSONL via the agent (no new
+ * claude process), so you can see what Claude did even though it ran in Warp.
  */
 export default function ConversationView({ socket }: ConversationViewProps) {
   const { agentId } = useParams<{ agentId: string }>();
@@ -22,29 +24,43 @@ export default function ConversationView({ socket }: ConversationViewProps) {
   const sessionParam = searchParams.get('session') || undefined;
 
   const [messages, setMessages] = useState<ClaudeConvMessage[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [status, setStatus] = useState<Status>('loading');
   const [error, setError] = useState('');
   const lineRef = useRef(0);
   const sessionRef = useRef<string | undefined>(sessionParam);
   const gotAnyRef = useRef(false);
 
   useEffect(() => {
-    if (!socket || !agentId || !project) {
-      setLoading(false);
-      if (!project) setError('This link is missing the project path.');
+    if (!project) {
+      setStatus('error');
+      setError('This link is missing the project path.');
       return;
     }
+    // Wait (still "loading") until the socket is actually connected.
+    if (!socket || !agentId) return;
+
+    const timeout = setTimeout(() => {
+      if (!gotAnyRef.current) {
+        setStatus('error');
+        setError('No response from the agent — make sure it’s online.');
+      }
+    }, 12000);
 
     const handle = (payload: ClaudeConvDataPayload) => {
       if (payload.agentId !== agentId) return;
-      setLoading(false);
+      clearTimeout(timeout);
       if (payload.sessionId && !sessionRef.current) sessionRef.current = payload.sessionId;
       if (payload.messages && payload.messages.length > 0) {
         gotAnyRef.current = true;
-        setError('');
         setMessages((prev) => [...prev, ...payload.messages]);
-      } else if (payload.error && !gotAnyRef.current) {
-        setError(payload.error);
+        setStatus('ready');
+      } else if (!gotAnyRef.current) {
+        if (payload.error) {
+          setStatus('error');
+          setError(payload.error);
+        } else {
+          setStatus('ready'); // empty transcript, no error
+        }
       }
       lineRef.current = payload.totalLines;
     };
@@ -62,6 +78,7 @@ export default function ConversationView({ socket }: ConversationViewProps) {
     return () => {
       socket.off(CLAUDE_CONV_DATA, handle);
       clearInterval(interval);
+      clearTimeout(timeout);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [socket, agentId, project]);
@@ -83,15 +100,16 @@ export default function ConversationView({ socket }: ConversationViewProps) {
         </div>
       </div>
 
-      {loading ? (
-        <div className="text-center text-text-muted text-sm py-10">Loading conversation…</div>
-      ) : error ? (
-        <div className="text-center text-text-muted text-sm py-10 px-4">
+      {status === 'loading' ? (
+        <div className="flex-1 flex items-center justify-center text-text-muted text-sm">
+          Loading conversation…
+        </div>
+      ) : status === 'error' ? (
+        <div className="flex-1 flex items-center justify-center text-text-muted text-sm px-6 text-center">
           {error}
-          <div className="text-xs mt-2">The transcript may not exist yet, or the agent is offline.</div>
         </div>
       ) : (
-        <div className="flex-1 overflow-hidden">
+        <div className="flex-1 flex flex-col overflow-hidden">
           <ChatView messages={messages} />
         </div>
       )}

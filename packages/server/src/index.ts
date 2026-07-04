@@ -629,15 +629,16 @@ function trunc(s: string, n: number): string {
 // title for informational events that should not notify.
 function describeClaudeHook(p: ClaudeHookPayload): { title: string; body: string } {
   switch (p.event) {
-    case 'stop':
+    case 'stop': {
+      const folder = p.projectPath
+        ? p.projectPath.split(/[\\/]/).filter(Boolean).pop() || ''
+        : '';
+      const what = p.response ? trunc(p.response, 150) : 'ready for your next prompt';
       return {
-        title: 'Claude finished',
-        body: p.query
-          ? `"${trunc(p.query, 70)}" — ${trunc(p.response || 'done', 120)}`
-          : p.response
-            ? trunc(p.response, 180)
-            : 'Task complete — ready for your next prompt',
+        title: folder ? `Claude finished — ${folder}` : 'Claude finished',
+        body: what,
       };
+    }
     case 'idle_prompt':
       return { title: 'Claude is waiting', body: p.summary || 'Ready for your next prompt' };
     case 'permission_request':
