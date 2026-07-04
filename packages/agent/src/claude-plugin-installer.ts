@@ -75,12 +75,20 @@ export function normalizeClaudeHook(raw: any): ClaudeHookPayload | null {
 
   const name = raw.hook_event_name;
   if (name === 'Stop' || name === 'SubagentStop') {
-    return { event: 'stop' };
+    // Carry cwd + session so the notification can deep-link to the transcript.
+    return {
+      event: 'stop',
+      projectPath: typeof raw.cwd === 'string' ? raw.cwd : undefined,
+      claudeSessionId: typeof raw.session_id === 'string' ? raw.session_id : undefined,
+    };
   }
   if (name === 'Notification') {
     const msg: string = typeof raw.message === 'string' ? raw.message : '';
+    // Permission notifications fire even when the request auto-resolves (allow
+    // rules / bypass mode), so they're noisy and not reliably actionable — skip
+    // them. Keep only the genuine "Claude is idle, waiting for you" nudge.
     if (/permission|approve|allow|grant/i.test(msg)) {
-      return { event: 'permission_request', summary: msg };
+      return null;
     }
     return { event: 'idle_prompt', summary: msg || 'Waiting for your input' };
   }

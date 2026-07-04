@@ -337,7 +337,14 @@ agentNs.on('connection', (socket) => {
     const { title, body } = describeClaudeHook(payload);
     if (!title) return; // prompt_submit / tool_complete are informational
     clientNs.emit(CLAUDE_NOTIFY, { agentId, event: payload.event, title, body });
-    void sendPush({ title, body, tag: `claude-${payload.event}`, agentId });
+    // Deep-link the push: to the transcript view when we know the project, else
+    // to the agent's session screen.
+    let url = `/sessions/${agentId}`;
+    if (payload.projectPath) {
+      url = `/conversation/${agentId}?project=${encodeURIComponent(payload.projectPath)}`;
+      if (payload.claudeSessionId) url += `&session=${encodeURIComponent(payload.claudeSessionId)}`;
+    }
+    void sendPush({ title, body, tag: `claude-${payload.event}`, agentId, url });
   });
 
   // --- tmux session list relay (agent -> requesting client) ---

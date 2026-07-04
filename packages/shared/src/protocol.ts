@@ -264,6 +264,9 @@ export interface ClaudeHookPayload {
   response?: string;
   summary?: string;
   tool_name?: string;
+  // Where the turn happened, so a notification can deep-link to the transcript.
+  projectPath?: string;
+  claudeSessionId?: string;
 }
 
 export interface ClaudeNotifyPayload {
