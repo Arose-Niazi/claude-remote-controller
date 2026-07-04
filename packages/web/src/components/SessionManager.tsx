@@ -92,39 +92,39 @@ export default function SessionManager({ socket }: SessionManagerProps) {
 
   return (
     <div className="p-4 max-w-2xl mx-auto">
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-3">
+      <div className="mb-4">
+        <div className="flex items-center gap-3 mb-3 min-w-0">
           <button
             onClick={() => navigate('/dashboard')}
-            className="px-3 py-1 text-sm bg-surface-raised hover:bg-surface-overlay border border-border text-text-secondary rounded-lg transition-colors"
+            className="flex-shrink-0 px-3 py-1.5 text-sm bg-surface-raised hover:bg-surface-overlay border border-border text-text-secondary rounded-lg transition-colors"
           >
-            ← Back
+            ←
           </button>
-          <h2 className="text-lg font-medium text-text">{agentId}</h2>
+          <h2 className="text-lg font-medium text-text truncate min-w-0">{agentId}</h2>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1">
+          <button
+            onClick={() => setShowClaude(true)}
+            className="flex-shrink-0 whitespace-nowrap px-4 py-1.5 text-sm bg-claude hover:bg-claude-hover text-white rounded-lg transition-colors"
+          >
+            Claude
+          </button>
           <button
             onClick={() => setShowTmux(true)}
-            className="px-3 py-1.5 text-sm bg-surface-raised hover:bg-surface-overlay border border-border text-text-secondary rounded-lg transition-colors"
+            className="flex-shrink-0 whitespace-nowrap px-4 py-1.5 text-sm bg-surface-raised hover:bg-surface-overlay border border-border text-text-secondary rounded-lg transition-colors"
             title="Mirror a Warp/tmux session"
           >
             Warp
           </button>
           <button
             onClick={() => setShowBrowse(true)}
-            className="px-3 py-1.5 text-sm bg-surface-raised hover:bg-surface-overlay border border-border text-text-secondary rounded-lg transition-colors"
+            className="flex-shrink-0 whitespace-nowrap px-4 py-1.5 text-sm bg-surface-raised hover:bg-surface-overlay border border-border text-text-secondary rounded-lg transition-colors"
           >
             Browse
           </button>
           <button
-            onClick={() => setShowClaude(true)}
-            className="px-3 py-1.5 text-sm bg-claude hover:bg-claude-hover text-white rounded-xl transition-colors"
-          >
-            Claude
-          </button>
-          <button
             onClick={() => setShowVpn(true)}
-            className="px-3 py-1.5 text-sm bg-surface-raised hover:bg-surface-overlay border border-border text-text-secondary rounded-lg transition-colors"
+            className="flex-shrink-0 whitespace-nowrap px-4 py-1.5 text-sm bg-surface-raised hover:bg-surface-overlay border border-border text-text-secondary rounded-lg transition-colors"
           >
             VPN
           </button>

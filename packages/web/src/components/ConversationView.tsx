@@ -1,9 +1,23 @@
 import { useEffect, useRef, useState } from 'react';
 import { useParams, useSearchParams, useNavigate } from 'react-router-dom';
 import type { Socket } from 'socket.io-client';
-import { CLAUDE_CONV_READ, CLAUDE_CONV_DATA } from '@crc/shared';
-import type { ClaudeConvMessage, ClaudeConvDataPayload } from '@crc/shared';
+import {
+  CLAUDE_CONV_READ,
+  CLAUDE_CONV_DATA,
+  FILES_DOWNLOAD,
+  FILES_DOWNLOAD_READY,
+  FILES_DOWNLOAD_ERROR,
+} from '@crc/shared';
+import type {
+  ClaudeConvMessage,
+  ClaudeConvDataPayload,
+  FilesDownloadReadyPayload,
+  FilesDownloadErrorPayload,
+} from '@crc/shared';
 import ChatView from './ChatView';
+import FileNotifications from './FileNotifications';
+import { resolveFilePath } from '../lib/parseFilePaths';
+import { useNotificationStore } from '../stores/notificationStore';
 
 interface ConversationViewProps {
   socket: Socket | null;
@@ -29,6 +43,46 @@ export default function ConversationView({ socket }: ConversationViewProps) {
   const lineRef = useRef(0);
   const sessionRef = useRef<string | undefined>(sessionParam);
   const gotAnyRef = useRef(false);
+
+  // File download (relative paths resolve against the project dir).
+  const downloadIdsRef = useRef<Set<string>>(new Set());
+  const downloadCounter = useRef(0);
+  const [downloads, setDownloads] = useState<
+    { id: number; fileName: string; downloadUrl: string; size: number }[]
+  >([]);
+  const dismissDownload = (id: number) =>
+    setDownloads((prev) => prev.filter((d) => d.id !== id));
+
+  const handleFileDownload = (rawPath: string) => {
+    if (!socket || !agentId) return;
+    const resolved = resolveFilePath(rawPath, project || null);
+    const requestId = crypto.randomUUID();
+    downloadIdsRef.current.add(requestId);
+    socket.emit(FILES_DOWNLOAD, { agentId, path: resolved, requestId });
+  };
+
+  useEffect(() => {
+    if (!socket) return;
+    const onReady = (p: FilesDownloadReadyPayload) => {
+      if (!p.requestId || !downloadIdsRef.current.has(p.requestId)) return;
+      downloadIdsRef.current.delete(p.requestId);
+      setDownloads((prev) => [
+        ...prev,
+        { id: ++downloadCounter.current, fileName: p.fileName, downloadUrl: p.downloadUrl, size: p.size },
+      ]);
+    };
+    const onErr = (p: FilesDownloadErrorPayload) => {
+      if (!p.requestId || !downloadIdsRef.current.has(p.requestId)) return;
+      downloadIdsRef.current.delete(p.requestId);
+      useNotificationStore.getState().addToast('Download failed', p.error);
+    };
+    socket.on(FILES_DOWNLOAD_READY, onReady);
+    socket.on(FILES_DOWNLOAD_ERROR, onErr);
+    return () => {
+      socket.off(FILES_DOWNLOAD_READY, onReady);
+      socket.off(FILES_DOWNLOAD_ERROR, onErr);
+    };
+  }, [socket]);
 
   useEffect(() => {
     if (!project) {
@@ -90,9 +144,9 @@ export default function ConversationView({ socket }: ConversationViewProps) {
       <div className="flex items-center gap-3 px-4 py-2 border-b border-border flex-shrink-0">
         <button
           onClick={() => navigate(`/sessions/${agentId}`)}
-          className="px-3 py-1 text-sm bg-surface-raised hover:bg-surface-overlay border border-border text-text-secondary rounded-lg transition-colors"
+          className="flex-shrink-0 px-3 py-1.5 text-sm bg-surface-raised hover:bg-surface-overlay border border-border text-text-secondary rounded-lg transition-colors"
         >
-          ← Back
+          ←
         </button>
         <div className="min-w-0">
           <div className="text-sm text-text truncate">{projectShort || 'Conversation'}</div>
@@ -110,9 +164,11 @@ export default function ConversationView({ socket }: ConversationViewProps) {
         </div>
       ) : (
         <div className="flex-1 flex flex-col overflow-hidden">
-          <ChatView messages={messages} />
+          <ChatView messages={messages} onFileDownload={handleFileDownload} />
         </div>
       )}
+
+      <FileNotifications downloads={downloads} onDismiss={dismissDownload} />
     </div>
   );
 }
