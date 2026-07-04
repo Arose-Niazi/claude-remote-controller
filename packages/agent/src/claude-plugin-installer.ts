@@ -84,13 +84,13 @@ export function normalizeClaudeHook(raw: any): ClaudeHookPayload | null {
 
   const name = raw.hook_event_name;
   if (name === 'Stop' || name === 'SubagentStop') {
-    // Carry cwd + session (deep-link to the transcript) and Claude's last
-    // response (so the notification says WHAT finished).
+    // Carry cwd + session so the notification can deep-link to the transcript.
+    // The response text is filled in later (after a small delay) so Claude has
+    // finished flushing the final message to the transcript first.
     return {
       event: 'stop',
       projectPath: typeof raw.cwd === 'string' ? raw.cwd : undefined,
       claudeSessionId: typeof raw.session_id === 'string' ? raw.session_id : undefined,
-      response: lastAssistantSummary(typeof raw.transcript_path === 'string' ? raw.transcript_path : undefined),
     };
   }
   // Notification (idle / permission) is intentionally NOT notified — Stop
@@ -99,7 +99,7 @@ export function normalizeClaudeHook(raw: any): ClaudeHookPayload | null {
 }
 
 /** Read the last assistant text message from a transcript JSONL for the notification body. */
-function lastAssistantSummary(transcriptPath?: string): string | undefined {
+export function lastAssistantSummary(transcriptPath?: string): string | undefined {
   if (!transcriptPath) return undefined;
   try {
     const lines = readFileSync(transcriptPath, 'utf-8').split('\n');

@@ -50,7 +50,7 @@ import {
 
 import { loadConfig, LOCAL_CONTROL_PORT } from './config.js';
 import { logger } from './logger.js';
-import { installClaudeHooks, normalizeClaudeHook } from './claude-plugin-installer.js';
+import { installClaudeHooks, normalizeClaudeHook, lastAssistantSummary } from './claude-plugin-installer.js';
 import { startLocalControl } from './local-control.js';
 import { listTmuxSessions, buildTmuxLaunch } from './tmux.js';
 import { detectShell } from './shell.js';
@@ -136,16 +136,23 @@ reaperInterval.unref();
 //     runs on every platform. ---
 startLocalControl(LOCAL_CONTROL_PORT, (raw: ClaudeHookPayload) => {
   const payload = normalizeClaudeHook(raw);
+  if (!payload) return;
   logger.info(
-    {
-      rawEvent: (raw as any)?.hook_event_name || (raw as any)?.event,
-      mapped: payload?.event || null,
-      project: payload?.projectPath || null,
-      session: payload?.claudeSessionId ? 'yes' : 'no',
-    },
+    { rawEvent: (raw as any)?.hook_event_name || (raw as any)?.event, mapped: payload.event, project: payload.projectPath || null },
     'Claude hook received'
   );
-  if (payload && socket.connected) socket.emit(CLAUDE_HOOK, payload);
+
+  const transcript = (raw as any)?.transcript_path;
+  if (payload.event === 'stop' && typeof transcript === 'string') {
+    // Give Claude ~600ms to finish flushing the final assistant message to the
+    // transcript before we read it (otherwise we grab the PREVIOUS response).
+    setTimeout(() => {
+      payload.response = lastAssistantSummary(transcript);
+      if (socket.connected) socket.emit(CLAUDE_HOOK, payload);
+    }, 600);
+  } else if (socket.connected) {
+    socket.emit(CLAUDE_HOOK, payload);
+  }
 });
 
 // --- Terminal event handlers ---
