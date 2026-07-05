@@ -133,7 +133,7 @@ export default function AgentsManager({ onClose }: AgentsManagerProps) {
   }
 
   const enrollToken = created ? buildEnrollToken(created.agentId, created.secret) : '';
-  const installCmd = `npm i -g claude-remote-agent && crc-agent setup --token ${enrollToken}`;
+  const installCmd = `npm i -g cli-remote-agent && crc-agent setup --token ${enrollToken}`;
   const wsUrl = (location.protocol === 'https:' ? 'wss' : 'ws') + '//' + location.host;
 
   return (

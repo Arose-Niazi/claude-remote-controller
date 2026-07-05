@@ -3,7 +3,7 @@ import path from 'path';
 
 // Build the agent as self-contained CommonJS bundles.
 // - @crc/shared is bundled from source (pure types + const values, zero runtime
-//   deps) so an external `npm i -g claude-remote-agent` needs no workspace dep.
+//   deps) so an external `npm i -g cli-remote-agent` needs no workspace dep.
 // - node-pty stays external (native addon; installed as a real dependency).
 // - CommonJS is required: service-install.ts relies on __dirname.
 export default defineConfig({

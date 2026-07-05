@@ -1,4 +1,4 @@
-# claude-remote-agent
+# cli-remote-agent
 
 The **agent** for [Claude Remote Controller](https://github.com/Arose-Niazi/claude-remote-controller). Install it on any machine you want to reach from the CRC web app. It connects out to your self-hosted CRC server and exposes:
 
@@ -19,7 +19,7 @@ The **agent** for [Claude Remote Controller](https://github.com/Arose-Niazi/clau
 ## Install
 
 ```bash
-npm i -g claude-remote-agent
+npm i -g cli-remote-agent
 ```
 
 ## Enroll (first-run setup)

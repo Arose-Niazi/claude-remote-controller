@@ -15,7 +15,7 @@ Three parts:
 - **Relay server** (`packages/server`) — Node + Express + Socket.IO. Auth,
   per-user isolation, file transfer, Web Push. Serves the web app. This is the
   one thing you host.
-- **Agent** (`packages/agent`, published as [`claude-remote-agent`](#run-an-agent-on-a-machine))
+- **Agent** (`packages/agent`, published as [`cli-remote-agent`](#run-an-agent-on-a-machine))
   — a node-pty host you run on each machine you want to control. It connects out
   to the relay, so the machine needs no inbound ports.
 - **Web app** (`packages/web`) — a React PWA served by the relay. Add it to your
@@ -67,7 +67,7 @@ exists — macOS: `xcode-select --install`; Debian/Ubuntu:
 `sudo apt-get install -y python3 make g++`; Windows is usually prebuilt.
 
 ```bash
-npm install -g claude-remote-agent
+npm install -g cli-remote-agent
 crc-agent setup --token <TOKEN FROM THE "Add agent" DIALOG>
 crc-agent
 ```
