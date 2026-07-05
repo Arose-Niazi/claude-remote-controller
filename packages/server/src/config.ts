@@ -40,5 +40,5 @@ export const config = {
   // in-app toasts + foreground browser notifications only.
   vapidPublicKey: process.env.VAPID_PUBLIC_KEY || '',
   vapidPrivateKey: process.env.VAPID_PRIVATE_KEY || '',
-  vapidSubject: process.env.VAPID_SUBJECT || 'mailto:admin@arose-niazi.me',
+  vapidSubject: process.env.VAPID_SUBJECT || 'mailto:admin@example.com',
 };

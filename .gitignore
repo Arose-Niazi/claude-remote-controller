@@ -1,7 +1,27 @@
 node_modules/
 dist/
+build/
 .env
+.env.local
 *.tsbuildinfo
 .DS_Store
 Thumbs.db
 /packages/web/dist/
+
+# Runtime data (accounts, tokens, push subscriptions, transcripts, uploads)
+data/
+/packages/*/data/
+
+# Claude Code local settings (per-machine — never commit)
+.claude/settings.local.json
+
+# Secrets / keys (defense in depth)
+*.pem
+*.key
+*.crt
+*.p12
+
+# Scratch / internal docs
+messages/
+random_message.txt
+PLAN.md
