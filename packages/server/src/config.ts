@@ -36,6 +36,11 @@ export const config = {
   tokenSecret: process.env.TOKEN_SECRET || DEV_TOKEN_SECRET,
   agents,
   nodeEnv,
+  // Comma-separated allowed web origins for CORS. Empty => same-origin only.
+  allowedOrigins: (process.env.ALLOWED_ORIGINS || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean),
   // Web Push (VAPID). When unset, push is disabled and the app falls back to
   // in-app toasts + foreground browser notifications only.
   vapidPublicKey: process.env.VAPID_PUBLIC_KEY || '',

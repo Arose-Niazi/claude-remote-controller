@@ -112,6 +112,7 @@ import agentRoutes from './routes/agent.routes.js';
 import fileRoutes from './routes/file.routes.js';
 import pushRoutes from './routes/push.routes.js';
 import { initPush, sendPush } from './push.js';
+import { runMigration } from './migration.js';
 
 const app = express();
 const httpServer = createServer(app);
@@ -657,6 +658,9 @@ function broadcastSessionsForAgent(agentId: string): void {
 }
 
 // --- Start ---
+// First-boot migration: seed the admin user from ADMIN_PASSWORD and adopt legacy
+// env AGENTS as admin-owned so the existing single-user deployment keeps working.
+runMigration();
 // Push agent-list changes that originate inside the registry (heartbeat timeout).
 setAgentsChangedListener(broadcastAgents);
 startCleanupInterval();
