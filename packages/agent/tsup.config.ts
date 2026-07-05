@@ -8,6 +8,7 @@ import path from 'path';
 // - CommonJS is required: service-install.ts relies on __dirname.
 export default defineConfig({
   entry: [
+    'src/cli.ts',
     'src/index.ts',
     'src/setup.ts',
     'src/service-install.ts',
