@@ -5,10 +5,10 @@
  * ':', '\\', '/', '.', and spaces uniformly, so both backslash and forward-slash
  * Windows cwds encode the same way.
  *
- * Unix:    /Users/arose/Projects        → -Users-arose-Projects
- * Windows: D:\Projects\others\myapp     → D--Projects-others-myapp
- * Windows: D:/Projects/others/myapp     → D--Projects-others-myapp
- *          D:\Projects\site.com         → D--Projects-site-com
+ * Unix:    /Users/alice/code            → -Users-alice-code
+ * Windows: C:\Projects\myapp            → C--Projects-myapp
+ * Windows: C:/Projects/myapp            → C--Projects-myapp
+ *          C:\Projects\site.com         → C--Projects-site-com
  */
 export function encodeProjectPath(projectPath: string): string {
   return projectPath.replace(/[^A-Za-z0-9]/g, '-');
