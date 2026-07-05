@@ -11,7 +11,8 @@ import {
   type PendingStore,
   type StoredFile,
 } from '../file-store.js';
-import { verifyToken, validateAgentAuth } from '../auth.js';
+import { requireUser, authenticate } from '../auth-middleware.js';
+import { getOwner, authenticateAgent } from '../agents-store.js';
 import { FILE_MAX_SIZE } from '@crc/shared';
 
 const router = Router();
@@ -25,16 +26,13 @@ let inFlightBytes = 0;
 function authMiddleware(req: any, res: any, next: any): void {
   if (req.path.startsWith('/d/')) return next();
 
-  // Try Bearer token first
-  const auth = req.headers.authorization;
-  if (auth?.startsWith('Bearer ') && verifyToken(auth.slice(7))) {
-    return next();
-  }
+  // Bearer token — resolve to a live user (rejects revoked/deleted-user tokens).
+  if (authenticate(req)) return next();
 
-  // Try agent auth (for file-explorer downloads)
+  // Agent auth (for file-explorer receives) — validated against the agent store.
   const agentId = req.headers['x-agent-id'] as string;
   const agentSecret = req.headers['x-agent-secret'] as string;
-  if (agentId && agentSecret && validateAgentAuth(agentId, agentSecret)) {
+  if (agentId && agentSecret && authenticateAgent(agentId, agentSecret) !== null) {
     return next();
   }
 
@@ -49,8 +47,9 @@ router.use(authMiddleware);
 function streamToStore(
   req: any,
   res: any,
-  begin: (fileName: string) => PendingStore,
+  begin: (fileName: string, ownerUserId?: string) => PendingStore,
   fileName: string,
+  ownerUserId?: string,
 ): void {
   // Snapshot finalized bytes on disk; add live in-flight bytes so concurrent
   // uploads are accounted for. Reject up front if already at/over cap.
@@ -62,7 +61,7 @@ function streamToStore(
     return;
   }
 
-  const pending = begin(fileName);
+  const pending = begin(fileName, ownerUserId);
   const out = fs.createWriteStream(pending.dataPath);
   let size = 0;
   let counted = 0; // bytes this request has added to inFlightBytes
@@ -121,9 +120,9 @@ function streamToStore(
 }
 
 // Phone uploads file for agent to download via curl
-router.post('/upload', (req, res) => {
+router.post('/upload', requireUser, (req: any, res) => {
   const fileName = (req.headers['x-file-name'] as string) || 'upload';
-  streamToStore(req, res, beginUpload, fileName);
+  streamToStore(req, res, beginUpload, fileName, req.userId);
 });
 
 // Signed download URL — no auth header needed
@@ -141,15 +140,19 @@ router.get('/d/:token', (req, res) => {
   });
 });
 
-// Agent uploads file for phone to download
+// Agent uploads file for phone to download. Authed via X-Agent-Id/X-Agent-Secret
+// by the global authMiddleware; tag the received file with the agent OWNER's
+// userId so it only surfaces in that owner's pending list.
 router.post('/receive', (req, res) => {
   const fileName = (req.headers['x-file-name'] as string) || 'download';
-  streamToStore(req, res, beginReceive, fileName);
+  const agentId = req.headers['x-agent-id'] as string;
+  const ownerUserId = agentId ? getOwner(agentId) : undefined;
+  streamToStore(req, res, beginReceive, fileName, ownerUserId);
 });
 
-// List files waiting for phone download
-router.get('/pending', (_req, res) => {
-  res.json(getPendingReceives());
+// List files waiting for phone download — only the requesting user's receives.
+router.get('/pending', requireUser, (req: any, res) => {
+  res.json(getPendingReceives(req.userId));
 });
 
 export default router;

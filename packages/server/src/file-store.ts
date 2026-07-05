@@ -20,6 +20,7 @@ export interface StoredFile {
   size: number;
   downloadUrl: string;
   expiresAt: number;
+  ownerUserId?: string;
 }
 
 // Handle returned by beginStore — the caller streams bytes into dataPath, then
@@ -32,7 +33,7 @@ export interface PendingStore {
   abort: () => void;
 }
 
-function beginStore(baseDir: string, fileName: string): PendingStore {
+function beginStore(baseDir: string, fileName: string, ownerUserId?: string): PendingStore {
   ensureDirs();
   const fileId = uuid();
   const dir = path.join(baseDir, fileId);
@@ -44,10 +45,10 @@ function beginStore(baseDir: string, fileName: string): PendingStore {
     dataPath,
     finalize(size: number): StoredFile {
       const expiresAt = Date.now() + FILE_TTL;
-      const meta = { fileName, size, uploadedAt: Date.now(), expiresAt, downloaded: false };
+      const meta = { fileName, size, uploadedAt: Date.now(), expiresAt, downloaded: false, ownerUserId };
       fs.writeFileSync(path.join(dir, 'meta.json'), JSON.stringify(meta));
       const downloadUrl = `/api/files/d/${generateSignedToken(fileId, expiresAt)}`;
-      return { fileId, fileName, size, downloadUrl, expiresAt };
+      return { fileId, fileName, size, downloadUrl, expiresAt, ownerUserId };
     },
     abort(): void {
       fs.rmSync(dir, { recursive: true, force: true });
@@ -55,12 +56,12 @@ function beginStore(baseDir: string, fileName: string): PendingStore {
   };
 }
 
-export function beginUpload(fileName: string): PendingStore {
-  return beginStore(uploadsDir(), fileName);
+export function beginUpload(fileName: string, ownerUserId?: string): PendingStore {
+  return beginStore(uploadsDir(), fileName, ownerUserId);
 }
 
-export function beginReceive(fileName: string): PendingStore {
-  return beginStore(receivesDir(), fileName);
+export function beginReceive(fileName: string, ownerUserId?: string): PendingStore {
+  return beginStore(receivesDir(), fileName, ownerUserId);
 }
 
 // Sum the bytes of all stored data files across uploads + receives, so callers
@@ -123,7 +124,7 @@ export function markDownloaded(token: string): void {
   }
 }
 
-export function getPendingReceives(): StoredFile[] {
+export function getPendingReceives(userId?: string): StoredFile[] {
   ensureDirs();
   const result: StoredFile[] = [];
   const dir = receivesDir();
@@ -140,12 +141,16 @@ export function getPendingReceives(): StoredFile[] {
       continue;
     }
     if (meta.downloaded || meta.expiresAt < Date.now()) continue;
+    // Per-user isolation: when a userId is given, only surface receives owned by
+    // that user so users can't see each other's transferred files.
+    if (userId !== undefined && meta.ownerUserId !== userId) continue;
     result.push({
       fileId,
       fileName: meta.fileName,
       size: meta.size,
       downloadUrl: `/api/files/d/${generateSignedToken(fileId, meta.expiresAt)}`,
       expiresAt: meta.expiresAt,
+      ownerUserId: meta.ownerUserId,
     });
   }
   return result;

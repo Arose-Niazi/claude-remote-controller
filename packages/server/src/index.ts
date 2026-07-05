@@ -82,12 +82,16 @@ import {
 
 import { config } from './config.js';
 import { logger } from './logger.js';
-import { verifyToken, validateAgentAuth } from './auth.js';
+import { verifyToken } from './auth.js';
+import { authenticateAgent, getOwner as agentStoreGetOwner } from './agents-store.js';
+import { resolveTokenUser } from './users.js';
+import { requireUser } from './auth-middleware.js';
 import {
   registerAgent,
   updateHeartbeat,
   unregisterAgent,
-  getAgentList,
+  getAgentListForUser,
+  getAgentOwnerId,
   getAgentSocketId,
   setAgentsChangedListener,
 } from './agent-registry.js';
@@ -111,11 +115,24 @@ import authRoutes from './routes/auth.routes.js';
 import agentRoutes from './routes/agent.routes.js';
 import fileRoutes from './routes/file.routes.js';
 import pushRoutes from './routes/push.routes.js';
-import { initPush, sendPush } from './push.js';
+import { initPush, sendPushToUser } from './push.js';
 import { runMigration } from './migration.js';
 
 const app = express();
+// Behind Nginx: trust the first proxy hop so req.ip is the real client address.
+app.set('trust proxy', 1);
 const httpServer = createServer(app);
+
+// Security headers on every response.
+app.use((_req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  if (config.nodeEnv === 'production') {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
+  next();
+});
 
 // Parse JSON for every route EXCEPT the file upload/receive endpoints, which read
 // the raw request body as a stream. A global express.json() would consume (and
@@ -132,16 +149,20 @@ app.use((req, res, next) => {
 // FILES_LIST / FILES_DOWNLOAD / AGENT_EXEC are request/response over the relay.
 // We map each requestId to the requesting client's socket so the agent's result
 // is delivered ONLY to that client, instead of broadcast to everyone.
-const pendingRpc = new Map<string, { socketId: string; at: number }>();
-function trackRpc(requestId: string, socketId: string): void {
-  pendingRpc.set(requestId, { socketId, at: Date.now() });
+const pendingRpc = new Map<string, { socketId: string; agentId: string; at: number }>();
+function trackRpc(requestId: string, socketId: string, agentId: string): void {
+  pendingRpc.set(requestId, { socketId, agentId, at: Date.now() });
 }
-function resolveRpc(requestId: string | undefined): string | null {
+// Deliver a result only if the responding agent is the one the request targeted
+// (which the requester provably owns). Otherwise return null → owner-room
+// fallback. Prevents a client-chosen requestId from mis-routing another user's
+// result (file bytes, exec stdout) to the wrong socket.
+function resolveRpc(requestId: string | undefined, respondingAgentId: string): string | null {
   if (!requestId) return null;
   const entry = pendingRpc.get(requestId);
   if (!entry) return null;
   pendingRpc.delete(requestId);
-  return entry.socketId;
+  return entry.agentId === respondingAgentId ? entry.socketId : null;
 }
 // Reap RPCs whose result never came back (agent offline mid-request, etc.).
 setInterval(() => {
@@ -165,21 +186,8 @@ app.get('/api/health', (_req, res) => {
 
 app.use('/api/auth', authRoutes);
 
-// Auth middleware for protected routes
-app.use('/api/agents', (req, res, next) => {
-  const auth = req.headers.authorization;
-  if (!auth?.startsWith('Bearer ')) {
-    res.status(401).json({ error: 'Missing token' });
-    return;
-  }
-  const payload = verifyToken(auth.slice(7));
-  if (!payload) {
-    res.status(401).json({ error: 'Invalid token' });
-    return;
-  }
-  next();
-});
-app.use('/api/agents', agentRoutes);
+// Auth middleware for protected routes — attaches req.userId / req.role.
+app.use('/api/agents', requireUser, agentRoutes);
 app.use('/api/files', fileRoutes);
 app.use('/api/push', pushRoutes);
 
@@ -199,7 +207,12 @@ app.get('*', (_req, res, next) => {
 // --- Socket.IO ---
 const io = new Server(httpServer, {
   cors: {
-    origin: config.nodeEnv === 'development' ? '*' : undefined,
+    origin:
+      config.allowedOrigins.length > 0
+        ? config.allowedOrigins
+        : config.nodeEnv === 'development'
+          ? '*'
+          : undefined,
   },
   transports: ['websocket', 'polling'],
 });
@@ -209,16 +222,21 @@ const agentNs = io.of('/agent');
 
 agentNs.use((socket, next) => {
   const { agentId, secret } = socket.handshake.auth;
-  if (!agentId || !secret || !validateAgentAuth(agentId, secret)) {
+  const ownerUserId = agentId && secret ? authenticateAgent(agentId, secret) : null;
+  if (!agentId || !secret || !ownerUserId) {
     next(new Error('Authentication failed'));
     return;
   }
-  (socket.data as { agentId: string }).agentId = agentId;
+  const data = socket.data as { agentId: string; ownerUserId: string };
+  data.agentId = agentId;
+  data.ownerUserId = ownerUserId;
   next();
 });
 
 agentNs.on('connection', (socket) => {
-  const agentId = (socket.data as { agentId: string }).agentId;
+  const data = socket.data as { agentId: string; ownerUserId: string };
+  const agentId = data.agentId;
+  const ownerUserId = data.ownerUserId;
 
   // The agent came back: cancel any pending grace cleanup for it.
   const graceTimer = agentGraceTimers.get(agentId);
@@ -233,7 +251,7 @@ agentNs.on('connection', (socket) => {
   // Register FIRST so the registry already points at this new socket. Only then
   // evict the stale socket — its synchronous disconnect handler will see that it
   // is no longer the current socket and no-op, instead of wiping the live agent.
-  registerAgent(agentId, socket.id);
+  registerAgent(agentId, socket.id, ownerUserId);
   updateAgentSocketId(agentId, socket.id);
 
   if (staleSocketId && staleSocketId !== socket.id) {
@@ -255,12 +273,12 @@ agentNs.on('connection', (socket) => {
     }
   }
 
-  broadcastAgents();
-  broadcastSessionsForAgent(agentId);
+  emitAgentsToUser(ownerUserId);
+  emitSessionsForAgent(agentId);
 
   socket.on(AGENT_HEARTBEAT, (payload: HeartbeatPayload) => {
     updateHeartbeat(agentId, payload);
-    broadcastAgents();
+    emitAgentsToUser(ownerUserId);
   });
 
   socket.on(SESSION_SYNC_RESULT, (payload: SessionSyncResultPayload) => {
@@ -273,7 +291,7 @@ agentNs.on('connection', (socket) => {
       }
     }
     // Broadcast updated session list
-    broadcastSessionsForAgent(agentId);
+    emitSessionsForAgent(agentId);
   });
 
   socket.on(TERMINAL_OUTPUT, (payload: TerminalOutputPayload) => {
@@ -284,52 +302,52 @@ agentNs.on('connection', (socket) => {
 
   socket.on(TERMINAL_EXIT, (payload: TerminalExitPayload) => {
     const session = getSession(payload.sessionId);
-    // Broadcast to all clients (not just attached) so notification listeners fire
-    clientNs.emit(TERMINAL_EXIT, {
+    // Broadcast to the owner's clients (not just attached) so notification listeners fire
+    clientNs.to(userRoom(ownerUserId)).emit(TERMINAL_EXIT, {
       ...payload,
       sessionName: session?.name,
       agentId: session?.agentId ?? agentId,
     });
     killSession(payload.sessionId);
-    if (session) broadcastSessionsForAgent(session.agentId);
+    if (session) emitSessionsForAgent(session.agentId);
   });
 
   // --- VPN relay (agent -> client) ---
   socket.on(VPN_UPDATE, (payload: VpnUpdatePayload) => {
-    clientNs.emit(VPN_UPDATE, { agentId, profiles: payload.profiles });
+    clientNs.to(userRoom(ownerUserId)).emit(VPN_UPDATE, { agentId, profiles: payload.profiles });
   });
 
   // --- File explorer relay (agent -> client) ---
   // Deliver only to the client that made the request (tracked by requestId).
   socket.on(FILES_LIST_RESULT, (payload: FilesListResultPayload) => {
     const enriched = { ...payload, agentId };
-    const target = resolveRpc(payload.requestId);
+    const target = resolveRpc(payload.requestId, agentId);
     if (target) clientNs.to(target).emit(FILES_LIST_RESULT, enriched);
-    else clientNs.emit(FILES_LIST_RESULT, enriched);
+    else clientNs.to(userRoom(ownerUserId)).emit(FILES_LIST_RESULT, enriched);
   });
 
   socket.on(FILES_DOWNLOAD_READY, (payload: FilesDownloadReadyPayload) => {
     const enriched = { ...payload, agentId };
-    const target = resolveRpc(payload.requestId);
+    const target = resolveRpc(payload.requestId, agentId);
     if (target) clientNs.to(target).emit(FILES_DOWNLOAD_READY, enriched);
-    else clientNs.emit(FILES_DOWNLOAD_READY, enriched);
+    else clientNs.to(userRoom(ownerUserId)).emit(FILES_DOWNLOAD_READY, enriched);
   });
 
   socket.on(FILES_DOWNLOAD_ERROR, (payload: FilesDownloadErrorPayload) => {
     const enriched = { ...payload, agentId };
-    const target = resolveRpc(payload.requestId);
+    const target = resolveRpc(payload.requestId, agentId);
     if (target) clientNs.to(target).emit(FILES_DOWNLOAD_ERROR, enriched);
-    else clientNs.emit(FILES_DOWNLOAD_ERROR, enriched);
+    else clientNs.to(userRoom(ownerUserId)).emit(FILES_DOWNLOAD_ERROR, enriched);
   });
 
   // --- Claude sessions relay (agent -> client) ---
   socket.on(CLAUDE_SESSIONS_RESULT, (payload: ClaudeSessionsResultPayload) => {
-    clientNs.emit(CLAUDE_SESSIONS_RESULT, { ...payload, agentId });
+    clientNs.to(userRoom(ownerUserId)).emit(CLAUDE_SESSIONS_RESULT, { ...payload, agentId });
   });
 
   // --- Claude conversation relay (agent -> client) ---
   socket.on(CLAUDE_CONV_DATA, (payload: ClaudeConvDataPayload) => {
-    clientNs.emit(CLAUDE_CONV_DATA, { ...payload, agentId });
+    clientNs.to(userRoom(ownerUserId)).emit(CLAUDE_CONV_DATA, { ...payload, agentId });
   });
 
   // --- Claude hook events -> Web Push + in-app toast (works even when Claude
@@ -337,7 +355,7 @@ agentNs.on('connection', (socket) => {
   socket.on(CLAUDE_HOOK, (payload: ClaudeHookPayload) => {
     const { title, body } = describeClaudeHook(payload);
     if (!title) return; // prompt_submit / tool_complete are informational
-    clientNs.emit(CLAUDE_NOTIFY, { agentId, event: payload.event, title, body });
+    clientNs.to(userRoom(ownerUserId)).emit(CLAUDE_NOTIFY, { agentId, event: payload.event, title, body });
     // Deep-link the push: to the transcript view when we know the project, else
     // to the agent's session screen.
     let url = `/sessions/${agentId}`;
@@ -345,23 +363,23 @@ agentNs.on('connection', (socket) => {
       url = `/conversation/${agentId}?project=${encodeURIComponent(payload.projectPath)}`;
       if (payload.claudeSessionId) url += `&session=${encodeURIComponent(payload.claudeSessionId)}`;
     }
-    void sendPush({ title, body, tag: `claude-${payload.event}`, agentId, url });
+    void sendPushToUser(ownerUserId, { title, body, tag: `claude-${payload.event}`, agentId, url });
   });
 
   // --- tmux session list relay (agent -> requesting client) ---
   socket.on(TMUX_LIST_RESULT, (payload: TmuxListResultPayload) => {
     const enriched = { ...payload, agentId };
-    const target = resolveRpc(payload.requestId);
+    const target = resolveRpc(payload.requestId, agentId);
     if (target) clientNs.to(target).emit(TMUX_LIST_RESULT, enriched);
-    else clientNs.emit(TMUX_LIST_RESULT, enriched);
+    else clientNs.to(userRoom(ownerUserId)).emit(TMUX_LIST_RESULT, enriched);
   });
 
   // --- Agent exec relay (agent -> client) ---
   socket.on(AGENT_EXEC_RESULT, (payload: AgentExecResultPayload) => {
     const enriched = { ...payload, agentId };
-    const target = resolveRpc(payload.requestId);
+    const target = resolveRpc(payload.requestId, agentId);
     if (target) clientNs.to(target).emit(AGENT_EXEC_RESULT, enriched);
-    else clientNs.emit(AGENT_EXEC_RESULT, enriched);
+    else clientNs.to(userRoom(ownerUserId)).emit(AGENT_EXEC_RESULT, enriched);
   });
 
   socket.on(SESSION_BUFFER, (payload: SessionBufferPayload) => {
@@ -387,8 +405,8 @@ agentNs.on('connection', (socket) => {
     // SESSION_DETACHED yet, giving the agent a grace window to reconnect.
     detachAgentSessions(agentId);
     unregisterAgent(agentId);
-    broadcastAgents();
-    broadcastSessionsForAgent(agentId);
+    emitAgentsToUser(ownerUserId);
+    emitSessionsForAgent(agentId);
 
     const existing = agentGraceTimers.get(agentId);
     if (existing) clearTimeout(existing);
@@ -404,7 +422,7 @@ agentNs.on('connection', (socket) => {
           });
         }
       }
-      broadcastSessionsForAgent(agentId);
+      emitSessionsForAgent(agentId);
     }, AGENT_RECONNECT_GRACE_MS);
     timer.unref();
     agentGraceTimers.set(agentId, timer);
@@ -416,24 +434,37 @@ const clientNs = io.of('/client');
 
 clientNs.use((socket, next) => {
   const { token } = socket.handshake.auth;
-  if (!token || !verifyToken(token)) {
+  const payload = token ? verifyToken(token) : null;
+  if (!payload) {
     next(new Error('Authentication failed'));
     return;
   }
+  const resolved = resolveTokenUser(payload);
+  if (!resolved) {
+    next(new Error('Authentication failed'));
+    return;
+  }
+  const data = socket.data as { userId: string; role: string };
+  data.userId = resolved.userId;
+  data.role = resolved.role;
   next();
 });
 
 clientNs.on('connection', (socket) => {
-  logger.info({ socketId: socket.id }, 'Client connected');
-  socket.emit(AGENTS_UPDATE, getAgentList());
+  const userId = (socket.data as { userId: string; role: string }).userId;
+  logger.info({ socketId: socket.id, userId }, 'Client connected');
+  socket.join(userRoom(userId));
+  socket.emit(AGENTS_UPDATE, getAgentListForUser(userId));
 
   // --- Session lifecycle ---
   socket.on(SESSION_LIST, (payload: SessionListPayload) => {
+    if (!assertOwnsAgent(userId, payload.agentId)) return;
     socket.emit(SESSIONS_UPDATE, getSessionsForAgent(payload.agentId));
   });
 
   socket.on(SESSION_CREATE, (payload: SessionCreatePayload) => {
     const { agentId, name, cols, rows, tmux, launch } = payload;
+    if (!assertOwnsAgent(userId, agentId)) return;
     const agentSocketId = getAgentSocketId(agentId);
     if (!agentSocketId) {
       socket.emit(SESSION_DETACHED, { sessionId: '', reason: 'agent offline' });
@@ -449,7 +480,7 @@ clientNs.on('connection', (socket) => {
 
     agentNs.to(agentSocketId).emit(TERMINAL_OPEN, { sessionId, cols, rows, tmux, launch });
     socket.emit(TERMINAL_READY, { sessionId });
-    broadcastSessionsForAgent(agentId);
+    emitSessionsForAgent(agentId);
   });
 
   socket.on(SESSION_ATTACH, (payload: SessionAttachPayload) => {
@@ -458,6 +489,7 @@ clientNs.on('connection', (socket) => {
       socket.emit(SESSION_DETACHED, { sessionId: payload.sessionId, reason: 'session not found' });
       return;
     }
+    if (!assertOwnsAgent(userId, session.agentId)) return;
 
     const oldClientSocketId = attachSession(payload.sessionId, socket.id, payload.cols, payload.rows);
 
@@ -477,34 +509,38 @@ clientNs.on('connection', (socket) => {
     });
 
     socket.emit(TERMINAL_READY, { sessionId: payload.sessionId });
-    broadcastSessionsForAgent(session.agentId);
+    emitSessionsForAgent(session.agentId);
   });
 
   socket.on(SESSION_DETACH, (payload: SessionDetachPayload) => {
     const session = getSession(payload.sessionId);
     if (!session) return;
+    if (!assertOwnsAgent(userId, session.agentId)) return;
     detachSession(payload.sessionId);
     agentNs.to(session.agentSocketId).emit(SESSION_DETACH, payload);
-    broadcastSessionsForAgent(session.agentId);
+    emitSessionsForAgent(session.agentId);
   });
 
   socket.on(SESSION_RENAME, (payload: SessionRenamePayload) => {
     const session = getSession(payload.sessionId);
     if (!session) return;
+    if (!assertOwnsAgent(userId, session.agentId)) return;
     renameSession(payload.sessionId, payload.name);
-    broadcastSessionsForAgent(session.agentId);
+    emitSessionsForAgent(session.agentId);
   });
 
   socket.on(SESSION_KILL, (payload: SessionKillPayload) => {
     const session = getSession(payload.sessionId);
     if (!session) return;
+    if (!assertOwnsAgent(userId, session.agentId)) return;
     const agentId = session.agentId;
     agentNs.to(session.agentSocketId).emit(TERMINAL_CLOSE, { sessionId: payload.sessionId });
     killSession(payload.sessionId);
-    broadcastSessionsForAgent(agentId);
+    emitSessionsForAgent(agentId);
   });
 
   socket.on(SESSION_KILL_ALL, (payload: SessionKillAllPayload) => {
+    if (!assertOwnsAgent(userId, payload.agentId)) return;
     const sessions = getSessionsForAgent(payload.agentId);
     const agentSocketId = getAgentSocketId(payload.agentId);
     for (const s of sessions) {
@@ -513,11 +549,12 @@ clientNs.on('connection', (socket) => {
       }
       killSession(s.id);
     }
-    broadcastSessionsForAgent(payload.agentId);
+    emitSessionsForAgent(payload.agentId);
   });
 
   // --- VPN relay (client -> agent) ---
   socket.on(VPN_LIST, (payload: VpnListPayload) => {
+    if (!assertOwnsAgent(userId, payload.agentId)) return;
     const agentSocketId = getAgentSocketId(payload.agentId);
     if (agentSocketId) agentNs.to(agentSocketId).emit(VPN_LIST, {});
   });
@@ -525,6 +562,7 @@ clientNs.on('connection', (socket) => {
   socket.on(VPN_CONNECT, (payload: VpnConnectPayload) => {
     const { agentId, profileId } = payload;
     if (!agentId) return;
+    if (!assertOwnsAgent(userId, agentId)) return;
     const agentSocketId = getAgentSocketId(agentId);
     if (agentSocketId) agentNs.to(agentSocketId).emit(VPN_CONNECT, { profileId });
   });
@@ -532,6 +570,7 @@ clientNs.on('connection', (socket) => {
   socket.on(VPN_DISCONNECT, (payload: VpnDisconnectPayload) => {
     const { agentId, profileId } = payload;
     if (!agentId) return;
+    if (!assertOwnsAgent(userId, agentId)) return;
     const agentSocketId = getAgentSocketId(agentId);
     if (agentSocketId) agentNs.to(agentSocketId).emit(VPN_DISCONNECT, { profileId });
   });
@@ -540,6 +579,7 @@ clientNs.on('connection', (socket) => {
   socket.on(CLAUDE_CONV_READ, (payload: ClaudeConvReadPayload) => {
     const { agentId, ...rest } = payload;
     if (!agentId) return;
+    if (!assertOwnsAgent(userId, agentId)) return;
     const agentSocketId = getAgentSocketId(agentId);
     if (agentSocketId) agentNs.to(agentSocketId).emit(CLAUDE_CONV_READ, rest);
   });
@@ -548,6 +588,7 @@ clientNs.on('connection', (socket) => {
   socket.on(CLAUDE_SESSIONS_LIST, (payload: ClaudeSessionsListPayload) => {
     const { agentId, projectPath } = payload;
     if (!agentId) return;
+    if (!assertOwnsAgent(userId, agentId)) return;
     const agentSocketId = getAgentSocketId(agentId);
     if (agentSocketId) agentNs.to(agentSocketId).emit(CLAUDE_SESSIONS_LIST, { projectPath });
   });
@@ -556,10 +597,11 @@ clientNs.on('connection', (socket) => {
   socket.on(AGENT_EXEC, (payload: AgentExecPayload) => {
     const { agentId, requestId, command, cwd } = payload;
     if (!agentId) return;
+    if (!assertOwnsAgent(userId, agentId)) return;
     const agentSocketId = getAgentSocketId(agentId);
     if (!agentSocketId) return;
     const rid = requestId || uuid();
-    trackRpc(rid, socket.id);
+    trackRpc(rid, socket.id, agentId);
     agentNs.to(agentSocketId).emit(AGENT_EXEC, { requestId: rid, command, cwd });
   });
 
@@ -567,10 +609,11 @@ clientNs.on('connection', (socket) => {
   socket.on(TMUX_LIST, (payload: TmuxListPayload) => {
     const { agentId, requestId } = payload;
     if (!agentId) return;
+    if (!assertOwnsAgent(userId, agentId)) return;
     const agentSocketId = getAgentSocketId(agentId);
     if (!agentSocketId) return;
     const rid = requestId || uuid();
-    trackRpc(rid, socket.id);
+    trackRpc(rid, socket.id, agentId);
     agentNs.to(agentSocketId).emit(TMUX_LIST, { requestId: rid });
   });
 
@@ -578,33 +621,37 @@ clientNs.on('connection', (socket) => {
   socket.on(FILES_LIST, (payload: FilesListPayload) => {
     const { agentId, path: dirPath, requestId } = payload;
     if (!agentId) return;
+    if (!assertOwnsAgent(userId, agentId)) return;
     const agentSocketId = getAgentSocketId(agentId);
     if (!agentSocketId) return;
     const rid = requestId || uuid();
-    trackRpc(rid, socket.id);
+    trackRpc(rid, socket.id, agentId);
     agentNs.to(agentSocketId).emit(FILES_LIST, { requestId: rid, path: dirPath });
   });
 
   socket.on(FILES_DOWNLOAD, (payload: FilesDownloadPayload) => {
     const { agentId, path: filePath, requestId } = payload;
     if (!agentId) return;
+    if (!assertOwnsAgent(userId, agentId)) return;
     const agentSocketId = getAgentSocketId(agentId);
     if (!agentSocketId) return;
     const rid = requestId || uuid();
-    trackRpc(rid, socket.id);
+    trackRpc(rid, socket.id, agentId);
     agentNs.to(agentSocketId).emit(FILES_DOWNLOAD, { requestId: rid, path: filePath });
   });
 
-  // --- Terminal I/O (unchanged) ---
+  // --- Terminal I/O ---
   socket.on(TERMINAL_INPUT, (payload: TerminalInputPayload) => {
     const session = getSession(payload.sessionId);
     if (!session) return;
+    if (!assertOwnsAgent(userId, session.agentId)) return;
     agentNs.to(session.agentSocketId).emit(TERMINAL_INPUT, payload);
   });
 
   socket.on(TERMINAL_RESIZE, (payload: TerminalResizePayload) => {
     const session = getSession(payload.sessionId);
     if (!session) return;
+    if (!assertOwnsAgent(userId, session.agentId)) return;
     agentNs.to(session.agentSocketId).emit(TERMINAL_RESIZE, payload);
   });
 
@@ -649,12 +696,30 @@ function describeClaudeHook(p: ClaudeHookPayload): { title: string; body: string
   }
 }
 
-function broadcastAgents(): void {
-  clientNs.emit(AGENTS_UPDATE, getAgentList());
+// --- Per-user broadcast scoping ---------------------------------------------
+// Every client joins a room 'user:<userId>' on connect; agent->client fan-out is
+// scoped to the OWNER's room so a user only ever sees their own agents/sessions.
+const userRoom = (userId: string): string => 'user:' + userId;
+
+function emitAgentsToUser(userId: string): void {
+  clientNs.to(userRoom(userId)).emit(AGENTS_UPDATE, getAgentListForUser(userId));
 }
 
-function broadcastSessionsForAgent(agentId: string): void {
-  clientNs.emit(SESSIONS_UPDATE, getSessionsForAgent(agentId));
+// Resolve the owning userId for an agent, preferring the live registry and
+// falling back to the persistent agents store (e.g. agent currently offline).
+function ownerOf(agentId: string): string | undefined {
+  return getAgentOwnerId(agentId) ?? agentStoreGetOwner(agentId);
+}
+
+function emitSessionsForAgent(agentId: string): void {
+  const owner = ownerOf(agentId);
+  if (owner) clientNs.to(userRoom(owner)).emit(SESSIONS_UPDATE, getSessionsForAgent(agentId));
+}
+
+// Ownership gate for every client->agent handler. Returns false unless the
+// requesting user owns the target agent.
+function assertOwnsAgent(userId: string | undefined, agentId: string): boolean {
+  return !!userId && ownerOf(agentId) === userId;
 }
 
 // --- Start ---
@@ -662,7 +727,7 @@ function broadcastSessionsForAgent(agentId: string): void {
 // env AGENTS as admin-owned so the existing single-user deployment keeps working.
 runMigration();
 // Push agent-list changes that originate inside the registry (heartbeat timeout).
-setAgentsChangedListener(broadcastAgents);
+setAgentsChangedListener((ownerUserId: string) => emitAgentsToUser(ownerUserId));
 startCleanupInterval();
 initPush();
 

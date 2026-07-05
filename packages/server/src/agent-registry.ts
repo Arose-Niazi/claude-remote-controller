@@ -4,6 +4,7 @@ import { logger } from './logger.js';
 
 interface AgentEntry {
   socketId: string;
+  ownerUserId: string;
   info: AgentInfo;
   lastHeartbeat: number;
   timeoutHandle: NodeJS.Timeout;
@@ -13,13 +14,13 @@ const agents = new Map<string, AgentEntry>();
 
 // Invoked whenever the agent list changes in a way clients should hear about
 // (currently: a heartbeat-timeout flipping an agent offline). index.ts wires
-// this to broadcastAgents so the change is pushed to connected clients.
-let agentsChangedListener: (() => void) | null = null;
-export function setAgentsChangedListener(cb: () => void): void {
+// this to broadcastAgents so the change is pushed to just the owner's room.
+let agentsChangedListener: ((ownerUserId: string) => void) | null = null;
+export function setAgentsChangedListener(cb: (ownerUserId: string) => void): void {
   agentsChangedListener = cb;
 }
 
-export function registerAgent(agentId: string, socketId: string): void {
+export function registerAgent(agentId: string, socketId: string, ownerUserId: string): void {
   const existing = agents.get(agentId);
   if (existing) {
     clearTimeout(existing.timeoutHandle);
@@ -44,8 +45,8 @@ export function registerAgent(agentId: string, socketId: string): void {
   };
 
   const timeoutHandle = createTimeout(agentId);
-  agents.set(agentId, { socketId, info, lastHeartbeat: Date.now(), timeoutHandle });
-  logger.info({ agentId, socketId }, 'Agent registered');
+  agents.set(agentId, { socketId, ownerUserId, info, lastHeartbeat: Date.now(), timeoutHandle });
+  logger.info({ agentId, socketId, ownerUserId }, 'Agent registered');
 }
 
 export function updateHeartbeat(agentId: string, payload: HeartbeatPayload): void {
@@ -86,8 +87,14 @@ export function getAgentSocketId(agentId: string): string | undefined {
   return agents.get(agentId)?.socketId;
 }
 
-export function getAgentList(): AgentInfo[] {
-  return Array.from(agents.values()).map((e) => e.info);
+export function getAgentListForUser(userId: string): AgentInfo[] {
+  return Array.from(agents.values())
+    .filter((e) => e.ownerUserId === userId)
+    .map((e) => e.info);
+}
+
+export function getAgentOwnerId(agentId: string): string | undefined {
+  return agents.get(agentId)?.ownerUserId;
 }
 
 export function findAgentBySocketId(socketId: string): string | undefined {
@@ -103,9 +110,9 @@ function createTimeout(agentId: string): NodeJS.Timeout {
     if (entry) {
       entry.info.status = 'offline';
       logger.warn({ agentId }, 'Agent heartbeat timeout');
-      // Push the offline status to clients — without this they keep showing the
+      // Push the offline status to the owner — without this they keep showing the
       // agent online on a half-open socket and open sessions that never respond.
-      agentsChangedListener?.();
+      agentsChangedListener?.(entry.ownerUserId);
     }
   }, HEARTBEAT_TIMEOUT);
 }

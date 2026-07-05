@@ -102,7 +102,9 @@ export function resolveTokenUser(payload: Record<string, unknown>): { userId: st
   if (typeof payload.sub === 'string') {
     const u = findById(payload.sub);
     if (!u) return null;
-    if (typeof payload.ver === 'number' && payload.ver !== u.tokenVersion) return null;
+    // Require a matching tokenVersion — reject any sub token without one so a
+    // token can always be revoked by bumping the version.
+    if (typeof payload.ver !== 'number' || payload.ver !== u.tokenVersion) return null;
     return { userId: u.id, role: u.role };
   }
   // Legacy admin token (no sub) issued by the pre-multi-user server.
