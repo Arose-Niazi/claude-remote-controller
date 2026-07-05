@@ -3,6 +3,7 @@ import { useAuthStore } from '../stores/authStore';
 
 export default function LoginPage() {
   const login = useAuthStore((s) => s.login);
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -11,24 +12,11 @@ export default function LoginPage() {
     e.preventDefault();
     setError('');
     setLoading(true);
-
     try {
-      const res = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password }),
-      });
-
-      if (!res.ok) {
-        const data = await res.json();
-        setError(data.error || 'Login failed');
-        return;
+      const result = await login(username.trim(), password);
+      if (!result.ok) {
+        setError(result.error || 'Login failed');
       }
-
-      const { token } = await res.json();
-      login(token);
-    } catch {
-      setError('Connection failed');
     } finally {
       setLoading(false);
     }
@@ -58,17 +46,27 @@ export default function LoginPage() {
         )}
 
         <input
+          type="text"
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+          placeholder="Username"
+          autoFocus
+          autoComplete="username"
+          className="w-full px-4 py-3 bg-surface-raised border border-border rounded-xl text-text placeholder-text-muted focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent/50 mb-4 transition-colors"
+        />
+
+        <input
           type="password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
           placeholder="Password"
-          autoFocus
+          autoComplete="current-password"
           className="w-full px-4 py-3 bg-surface-raised border border-border rounded-xl text-text placeholder-text-muted focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent/50 mb-4 transition-colors"
         />
 
         <button
           type="submit"
-          disabled={loading || !password}
+          disabled={loading || !username.trim() || !password}
           className="w-full py-3 bg-accent hover:bg-accent-hover disabled:bg-surface-raised disabled:text-text-muted disabled:cursor-not-allowed rounded-xl font-medium transition-all text-white"
         >
           {loading ? 'Connecting...' : 'Connect'}

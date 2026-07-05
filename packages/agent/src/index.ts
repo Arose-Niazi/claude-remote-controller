@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import { io } from 'socket.io-client';
 import {
   AGENT_HEARTBEAT,
@@ -48,7 +49,7 @@ import {
   type AgentExecPayload,
 } from '@crc/shared';
 
-import { loadConfig, LOCAL_CONTROL_PORT } from './config.js';
+import { loadConfig, isConfigured, LOCAL_CONTROL_PORT } from './config.js';
 import { logger } from './logger.js';
 import { installClaudeHooks, normalizeClaudeHook, lastAssistantSummary } from './claude-plugin-installer.js';
 import { startLocalControl } from './local-control.js';
@@ -71,6 +72,11 @@ import {
   getAliveSessionIds,
   reapDetachedSessions,
 } from './terminal-manager.js';
+
+if (!isConfigured()) {
+  console.error('No agent configured. Run: crc-agent setup');
+  process.exit(1);
+}
 
 const config = loadConfig();
 logger.info({ agentId: config.agentId, serverUrl: config.serverUrl }, 'Starting agent');

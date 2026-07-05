@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import crypto from 'crypto';
 
 export interface VpnProfileConfig {
   id: string;
@@ -23,20 +24,46 @@ export interface AgentConfig {
   };
 }
 
-const CONFIG_DIR = path.join(os.homedir(), '.crc-agent');
-const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
+export const CONFIG_DIR = path.join(os.homedir(), '.crc-agent');
+export const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
+
+// Legacy placeholder secret from older default configs — treated as "not configured".
+const PLACEHOLDER_SECRET = 'changeme';
 
 // Loopback port the agent listens on for Claude Code hook callbacks (so events
 // fired while Claude runs in Warp/tmux reach the agent -> server -> push).
 export const LOCAL_CONTROL_PORT = Number(process.env.CRC_LOCAL_PORT) || 47600;
 
+export function defaultAgentId(): string {
+  return os.hostname().toLowerCase().replace(/[^a-z0-9-]/g, '-');
+}
+
 function defaultConfig(): AgentConfig {
   return {
-    agentId: os.hostname().toLowerCase().replace(/[^a-z0-9-]/g, '-'),
-    serverUrl: 'ws://localhost:3001',
-    secret: 'changeme',
+    agentId: defaultAgentId(),
+    // No serverUrl by default — the agent must be enrolled via `crc-agent setup`.
+    serverUrl: '',
+    // Random secret so an unconfigured install never ships a known secret.
+    secret: crypto.randomBytes(24).toString('hex'),
     shell: 'auto',
   };
+}
+
+/**
+ * True only when a real, usable config exists: file present, parseable, with a
+ * non-empty serverUrl and a secret that isn't the legacy placeholder.
+ */
+export function isConfigured(): boolean {
+  if (!fs.existsSync(CONFIG_FILE)) return false;
+  try {
+    const raw = fs.readFileSync(CONFIG_FILE, 'utf-8');
+    const cfg = JSON.parse(raw.replace(/^﻿/, '')) as Partial<AgentConfig>;
+    if (!cfg.serverUrl || !cfg.secret) return false;
+    if (cfg.secret === PLACEHOLDER_SECRET) return false;
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function loadConfig(): AgentConfig {
@@ -44,7 +71,7 @@ export function loadConfig(): AgentConfig {
     const config = defaultConfig();
     fs.mkdirSync(CONFIG_DIR, { recursive: true });
     fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2));
-    console.log(`Created default config at ${CONFIG_FILE} — edit it and restart.`);
+    console.log(`Created default config at ${CONFIG_FILE} — run \`crc-agent setup\` to enroll.`);
     return config;
   }
 
