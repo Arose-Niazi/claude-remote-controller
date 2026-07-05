@@ -59,6 +59,35 @@ function findProjectDir(projectPath: string): string | null {
   return null;
 }
 
+/**
+ * Locate a session transcript by its (globally unique) session id, scanning every
+ * project dir. Claude stores a session's transcript under the dir where the session
+ * STARTED — which differs from the hook-reported cwd when the user `cd`s mid-session
+ * (a completion notification then deep-links with the current cwd, whose encoded dir
+ * may not exist). The session id disambiguates reliably, so we fall back to it.
+ */
+function findSessionFileById(sessionId: string): string | null {
+  if (!/^[A-Za-z0-9._-]+$/.test(sessionId)) return null; // guard against path traversal
+  if (!fs.existsSync(CLAUDE_PROJECTS_DIR)) return null;
+
+  let dirs: string[];
+  try {
+    dirs = fs.readdirSync(CLAUDE_PROJECTS_DIR);
+  } catch {
+    return null;
+  }
+
+  for (const dir of dirs) {
+    const candidate = path.join(CLAUDE_PROJECTS_DIR, dir, `${sessionId}.jsonl`);
+    try {
+      if (fs.statSync(candidate).isFile()) return candidate;
+    } catch {
+      // not here (or rotated away mid-scan) — keep looking
+    }
+  }
+  return null;
+}
+
 function findLatestSessionFile(projectPath: string): { filePath: string; sessionId: string } | null {
   const dirPath = findProjectDir(projectPath);
 
@@ -101,11 +130,19 @@ export async function readConversation(
   let sessionId: string;
 
   if (specificSessionId) {
-    const dirPath = findProjectDir(projectPath);
-    if (!dirPath) return null;
-    filePath = path.join(dirPath, `${specificSessionId}.jsonl`);
     sessionId = specificSessionId;
-    if (!fs.existsSync(filePath)) return null;
+    // Fast path: the transcript sits under the encoded cwd (normal case).
+    const dirPath = findProjectDir(projectPath);
+    const direct = dirPath ? path.join(dirPath, `${specificSessionId}.jsonl`) : null;
+    if (direct && fs.existsSync(direct)) {
+      filePath = direct;
+    } else {
+      // Fallback: the session id is unique — find it wherever it actually lives
+      // (handles cwd drift during a session, subagent cwds, case/format skew).
+      const byId = findSessionFileById(specificSessionId);
+      if (!byId) return null;
+      filePath = byId;
+    }
   } else {
     const found = findLatestSessionFile(projectPath);
     if (!found) return null;
