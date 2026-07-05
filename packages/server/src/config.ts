@@ -3,15 +3,45 @@ const DEV_ADMIN_PASSWORD = 'changeme';
 
 const nodeEnv = process.env.NODE_ENV || 'development';
 
-// [#2] In production, refuse to start with the insecure dev defaults still in place.
+// [#2] In production, refuse to start with insecure/placeholder secrets in place.
+// A weak TOKEN_SECRET lets anyone forge login tokens (incl. admin), so we validate
+// strength here rather than merely checking the var is defined.
 if (nodeEnv === 'production') {
-  const missing: string[] = [];
-  if (process.env.TOKEN_SECRET === undefined) missing.push('TOKEN_SECRET');
-  if (process.env.ADMIN_PASSWORD === undefined) missing.push('ADMIN_PASSWORD');
-  if (missing.length > 0) {
+  const problems: string[] = [];
+
+  // Obvious placeholder/example values that must never reach production.
+  const WEAK_SECRETS = new Set([
+    DEV_TOKEN_SECRET,
+    'random-64-char-hex-string',
+    'changeme',
+    'change-me',
+    'replace-me',
+    'secret',
+    'REPLACE_WITH_A_RANDOM_32_BYTE_HEX_STRING',
+    'REPLACE_WITH_64_CHAR_RANDOM_HEX',
+  ]);
+  const WEAK_PASSWORDS = new Set([DEV_ADMIN_PASSWORD, 'change-me', 'password', 'admin']);
+  const ts = process.env.TOKEN_SECRET;
+  if (ts === undefined) {
+    problems.push('TOKEN_SECRET is not set');
+  } else if (ts.length < 32 || WEAK_SECRETS.has(ts.trim())) {
+    problems.push(
+      'TOKEN_SECRET is too weak — use a random value with at least 32 chars, e.g. ' +
+        '`node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"`'
+    );
+  }
+
+  const ap = process.env.ADMIN_PASSWORD;
+  if (ap === undefined) {
+    problems.push('ADMIN_PASSWORD is not set');
+  } else if (ap.length < 8 || WEAK_PASSWORDS.has(ap.trim())) {
+    problems.push('ADMIN_PASSWORD is too weak — use at least 8 characters and not a placeholder');
+  }
+
+  if (problems.length > 0) {
     console.error(
-      `FATAL: refusing to start in production with insecure defaults. ` +
-        `Set the following environment variable(s) to secure values: ${missing.join(', ')}.`
+      `FATAL: refusing to start in production with insecure configuration:\n` +
+        problems.map((p) => `  - ${p}`).join('\n')
     );
     process.exit(1);
   }
