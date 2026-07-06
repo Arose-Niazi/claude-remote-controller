@@ -161,7 +161,39 @@ export function detectClaudeWorking(term: Terminal): boolean {
   for (let y = startY; y <= endY; y++) {
     const line = buffer.getLine(y);
     if (!line) continue;
-    if (/esc to interrupt/i.test(line.translateToString(true))) return true;
+    const text = line.translateToString(true);
+    if (WORKING_PATTERNS.some((p) => p.test(text))) return true;
+  }
+  return false;
+}
+
+// Signals that Claude is mid-turn. Narrow (phone-width) panes truncate the
+// status-bar hint, so "esc to interrupt" never appears in full there — e.g.
+// "⏵⏵ bypass permissions on (shift+tab to cycle) · esc …" (Claude Code 2.1.x).
+const WORKING_PATTERNS = [
+  /esc to interrupt/i,
+  /\)\s*·\s*esc\b/, // truncated status suffix on narrow panes
+  /^\s*[✻✽✶✳✢·*+]\s+[A-Z][a-z]+ing(…|\.{3})/, // live spinner verb ("✻ Baking…")
+];
+
+// Idle-visible Claude Code chrome, for telling a Claude terminal apart from a
+// plain shell even when Claude isn't working (e.g. right after attaching).
+const CHROME_PATTERN =
+  /shift\+tab to cycle|bypass permissions|\? for shortcuts|@ for file paths|plan mode/i;
+
+/**
+ * True if the terminal near the cursor shows Claude Code UI chrome — works
+ * while Claude is idle, unlike detectClaudeWorking.
+ */
+export function detectClaudeChrome(term: Terminal): boolean {
+  const buffer = term.buffer.active;
+  const cursorAbsY = buffer.baseY + buffer.cursorY;
+  const startY = Math.max(0, cursorAbsY - 24);
+  const endY = Math.min(buffer.length - 1, cursorAbsY + 2);
+  for (let y = startY; y <= endY; y++) {
+    const line = buffer.getLine(y);
+    if (!line) continue;
+    if (CHROME_PATTERN.test(line.translateToString(true))) return true;
   }
   return false;
 }

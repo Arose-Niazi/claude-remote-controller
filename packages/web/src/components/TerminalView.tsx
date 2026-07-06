@@ -32,6 +32,7 @@ import {
   detectClaudePrompt,
   detectClaudeWorking,
   detectClaudeInputText,
+  detectClaudeChrome,
   promptsEqual,
   buildPromptSelectionKeys,
   type DetectedPrompt,
@@ -175,7 +176,13 @@ export default function TerminalView({ socket }: TerminalViewProps) {
       const wasWorking = claudeWorkingRef.current;
       const working = detectClaudeWorking(term);
       claudeWorkingRef.current = working;
-      if (working || detected) sawClaudeRef.current = true;
+      if (
+        working ||
+        detected ||
+        (!sawClaudeRef.current && detectClaudeChrome(term))
+      ) {
+        sawClaudeRef.current = true;
+      }
       if (working) {
         if (doneTimerRef.current !== null) {
           window.clearTimeout(doneTimerRef.current);
