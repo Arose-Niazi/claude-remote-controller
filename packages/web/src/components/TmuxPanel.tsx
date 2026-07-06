@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import type { Socket } from 'socket.io-client';
 import { TMUX_LIST, TMUX_LIST_RESULT } from '@crc/shared';
 import type { TmuxListResultPayload, TmuxSessionInfo } from '@crc/shared';
+import { useAgentStore } from '../stores/agentStore';
 
 interface TmuxPanelProps {
   socket: Socket | null;
@@ -19,6 +20,10 @@ interface TmuxPanelProps {
 export default function TmuxPanel({ socket, agentId, onClose }: TmuxPanelProps) {
   const navigate = useNavigate();
   const [sessions, setSessions] = useState<TmuxSessionInfo[]>([]);
+  const agents = useAgentStore((s) => s.agents);
+  const homeDir = agents.find((a) => a.id === agentId)?.homeDirectory || '';
+  const shortPath = (p?: string) =>
+    p && homeDir && p.startsWith(homeDir) ? `~${p.slice(homeDir.length)}` : p || '';
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const reqRef = useRef<string | null>(null);
@@ -90,14 +95,25 @@ export default function TmuxPanel({ socket, agentId, onClose }: TmuxPanelProps) 
                 onClick={() => mirror(s.name)}
                 className="w-full text-left px-4 py-2.5 rounded-xl border border-border-subtle bg-surface-raised hover:border-accent hover:bg-surface-overlay transition-colors flex items-center justify-between"
               >
-                <div>
-                  <div className="text-sm font-medium text-text font-mono">{s.name}</div>
-                  <div className="text-[11px] text-text-muted">
-                    {s.windows} window{s.windows === 1 ? '' : 's'}
-                    {s.attached ? ' · attached on PC' : ''}
+                <div className="min-w-0">
+                  <div className="text-sm font-medium text-text font-mono truncate">{s.name}</div>
+                  <div className="text-[11px] text-text-muted truncate">
+                    {[
+                      shortPath(s.path),
+                      `${s.windows} window${s.windows === 1 ? '' : 's'}`,
+                      s.attached ? 'attached on PC' : '',
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')}
                   </div>
+                  {s.claudeTitle && (
+                    <div className="text-[11px] text-claude truncate">
+                      ✳ {s.claudeTitle}
+                      {s.claudeStatus ? ` · ${s.claudeStatus}` : ''}
+                    </div>
+                  )}
                 </div>
-                <span className="text-xs text-accent">Mirror →</span>
+                <span className="text-xs text-accent flex-shrink-0 ml-3">Mirror →</span>
               </button>
             ))}
           </div>

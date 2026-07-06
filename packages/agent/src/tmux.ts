@@ -1,6 +1,7 @@
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import type { TmuxSessionInfo } from '@crc/shared';
+import { getLiveClaudeSessions, getPidParents, isDescendantOf } from './claude-live.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -21,7 +22,7 @@ export async function listTmuxSessions(): Promise<TmuxSessionInfo[]> {
   const { file, args } = tmuxCmd(['list-sessions', '-F', fmt]);
   try {
     const { stdout } = await execFileAsync(file, args, { timeout: 6000 });
-    return stdout
+    const sessions = stdout
       .split('\n')
       .map((line) => line.replace(/\r$/, '').trim())
       .filter(Boolean)
@@ -32,10 +33,69 @@ export async function listTmuxSessions(): Promise<TmuxSessionInfo[]> {
           windows: parseInt(windows, 10) || 1,
           attached: attached === '1',
           activity: parseInt(activity, 10) || undefined,
-        };
+        } as TmuxSessionInfo;
       });
+    await enrichWithPanesAndClaude(sessions);
+    return sessions;
   } catch {
     return [];
+  }
+}
+
+interface PaneInfo {
+  session: string;
+  pid: number;
+  path: string;
+  active: boolean;
+}
+
+/**
+ * Attach each session's cwd and, when a live Claude Code runs inside it, the
+ * chat name (/rename-able) + status from ~/.claude/sessions. Claude PIDs are
+ * matched to sessions by walking their ancestry up to a pane PID, with a cwd
+ * fallback. Best-effort: any failure leaves the base listing untouched.
+ * Skipped on Windows — tmux lives in WSL there, whose PID space and home
+ * directory don't line up with the host's ~/.claude.
+ */
+async function enrichWithPanesAndClaude(sessions: TmuxSessionInfo[]): Promise<void> {
+  if (IS_WIN || sessions.length === 0) return;
+  try {
+    const paneFmt = '#{session_name}\t#{pane_pid}\t#{pane_current_path}\t#{window_active}#{pane_active}';
+    const { file, args } = tmuxCmd(['list-panes', '-a', '-F', paneFmt]);
+    const { stdout } = await execFileAsync(file, args, { timeout: 6000 });
+    const panes: PaneInfo[] = stdout
+      .split('\n')
+      .map((line) => line.replace(/\r$/, '').trim())
+      .filter(Boolean)
+      .map((line) => {
+        const [session, pid, path, activeFlags] = line.split('\t');
+        return { session, pid: parseInt(pid, 10) || 0, path: path || '', active: activeFlags === '11' };
+      });
+
+    const byName = new Map(sessions.map((s) => [s.name, s]));
+    for (const pane of panes) {
+      const s = byName.get(pane.session);
+      if (s && (!s.path || pane.active)) s.path = pane.path || s.path;
+    }
+
+    const live = getLiveClaudeSessions();
+    if (live.length === 0) return;
+    const parents = await getPidParents();
+    for (const cs of live) {
+      // cwd fallback only when the ps snapshot failed — with ancestry data
+      // available, a non-match means the Claude simply isn't in tmux.
+      const target = parents.size > 0
+        ? panes.find((p) => p.pid > 0 && isDescendantOf(cs.pid, p.pid, parents))
+        : panes.find((p) => cs.cwd && p.path === cs.cwd);
+      if (!target) continue;
+      const s = byName.get(target.session);
+      if (!s) continue;
+      s.claudeTitle = cs.name;
+      s.claudeStatus = cs.status;
+      if (cs.cwd) s.path = cs.cwd;
+    }
+  } catch {
+    // enrichment is optional — base listing already populated
   }
 }
 

@@ -40,6 +40,9 @@ export default function SessionManager({ socket }: SessionManagerProps) {
   const agents = useAgentStore((s) => s.agents);
   const agent = agents.find((a) => a.id === agentId);
   const browseInitialPath = agent?.homeDirectory || '/';
+  const homeDir = agent?.homeDirectory || '';
+  const shortPath = (p?: string) =>
+    p && homeDir && p.startsWith(homeDir) ? `~${p.slice(homeDir.length)}` : p || '';
 
   // Holds the in-flight settings-write result listener so we can detach it when
   // the user cancels, on unmount, or once it fires.
@@ -288,7 +291,14 @@ export default function SessionManager({ socket }: SessionManagerProps) {
         </div>
       ) : (
         <div className="space-y-3">
-          {agentSessions.map((session) => (
+          {agentSessions.map((session) => {
+            const tmuxTarget = session.name.startsWith('tmux: ')
+              ? session.name.slice('tmux: '.length)
+              : null;
+            const tmuxMeta = tmuxTarget
+              ? tmuxSessions.find((t) => t.name === tmuxTarget)
+              : undefined;
+            return (
             <div
               key={session.id}
               className="rounded-2xl border border-border bg-surface-raised p-4"
@@ -340,6 +350,12 @@ export default function SessionManager({ socket }: SessionManagerProps) {
                 </span>
               </div>
 
+              {tmuxMeta && (tmuxMeta.path || tmuxMeta.claudeTitle) && (
+                <div className="text-xs text-text-muted mb-1 truncate">
+                  {shortPath(tmuxMeta.path)}
+                  {tmuxMeta.claudeTitle ? ` · ✳ ${tmuxMeta.claudeTitle}` : ''}
+                </div>
+              )}
               <div className="text-xs text-text-muted mb-3">
                 Created {timeAgo(session.createdAt)}
               </div>
@@ -370,7 +386,8 @@ export default function SessionManager({ socket }: SessionManagerProps) {
                 </button>
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -397,10 +414,21 @@ export default function SessionManager({ socket }: SessionManagerProps) {
               >
                 <div className="min-w-0">
                   <div className="text-sm font-medium text-text font-mono truncate">{s.name}</div>
-                  <div className="text-[11px] text-text-muted mt-0.5">
-                    {s.windows} window{s.windows === 1 ? '' : 's'}
-                    {s.attached ? ' · attached on PC' : ''}
+                  <div className="text-[11px] text-text-muted mt-0.5 truncate">
+                    {[
+                      shortPath(s.path),
+                      `${s.windows} window${s.windows === 1 ? '' : 's'}`,
+                      s.attached ? 'attached on PC' : '',
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')}
                   </div>
+                  {s.claudeTitle && (
+                    <div className="text-[11px] text-claude mt-0.5 truncate">
+                      ✳ {s.claudeTitle}
+                      {s.claudeStatus ? ` · ${s.claudeStatus}` : ''}
+                    </div>
+                  )}
                 </div>
                 <span className="text-xs text-accent flex-shrink-0 ml-3">Mirror →</span>
               </button>

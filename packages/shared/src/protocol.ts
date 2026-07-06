@@ -283,6 +283,9 @@ export interface TmuxSessionInfo {
   windows: number;
   attached: boolean;
   activity?: number; // last-activity unix seconds
+  path?: string; // cwd of the session (Claude's cwd if one runs inside, else the active pane's)
+  claudeTitle?: string; // live Claude Code chat name (auto-generated or /rename'd)
+  claudeStatus?: string; // live Claude Code status, e.g. 'busy' | 'idle'
 }
 
 export interface TmuxListPayload {
