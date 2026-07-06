@@ -166,6 +166,79 @@ export function detectClaudeWorking(term: Terminal): boolean {
   return false;
 }
 
+// The Claude Code composer line: "❯ <typed text>" (older builds render "> ").
+// Distinct from the "❯ 1. …" selection marker inside numbered option menus.
+const INPUT_PREFIX = /^[❯>]\s?/;
+const OPTION_MARKER = /^[❯>]?\s*\d{1,2}\.\s/;
+
+/**
+ * Read the text currently sitting in Claude Code's own input line — e.g. a
+ * message restored by ESC-interrupt, or one cycled in with ↑/↓ history.
+ *
+ * The caret sits at the end of the typed text, so we take the "❯" row down to
+ * the cursor row (a soft-wrapped input keeps the caret on its last row, with
+ * continuation rows in between) and cut the cursor row at the caret column —
+ * which also excludes placeholder/ghost text rendered after the caret.
+ * Returns '' when the input is empty or no composer line is near the cursor.
+ */
+export function detectClaudeInputText(term: Terminal): string {
+  const buffer = term.buffer.active;
+  const cursorAbsY = buffer.baseY + buffer.cursorY;
+
+  // Find the composer row at the caret or up to 20 rows above it (a wrapped
+  // input keeps the caret on its last row, with continuation rows between).
+  // The prefix must sit at column 0 (or just inside a box border): the
+  // continuation rows are space-indented, and stripping that indent before
+  // testing would let a quoted "> …" line inside the message masquerade as
+  // the composer row and truncate everything above it.
+  let promptY = -1;
+  for (let y = cursorAbsY; y >= Math.max(0, cursorAbsY - 20); y--) {
+    const line = buffer.getLine(y);
+    if (!line) break;
+    const raw = line.translateToString(true);
+    let anchored: string | null = null;
+    if (INPUT_PREFIX.test(raw)) {
+      anchored = raw;
+    } else if (/^[│┃]/.test(raw)) {
+      const stripped = stripBoxChars(raw);
+      if (INPUT_PREFIX.test(stripped)) anchored = stripped;
+    }
+    if (anchored !== null) {
+      if (OPTION_MARKER.test(anchored)) return ''; // menu marker, not the composer
+      promptY = y;
+      break;
+    }
+    // A blank row above the caret means we've left the input block.
+    if (stripBoxChars(raw) === '' && y !== cursorAbsY) break;
+  }
+  if (promptY < 0) return '';
+
+  // Reassemble the rows. The caret row is cut at the caret column, which
+  // drops placeholder/ghost text rendered after it. A row that ran the full
+  // terminal width hard-broke mid-token (e.g. a long URL), so the next row
+  // joins with '' — otherwise with ' ' (word wrap swallowed the space).
+  // Hard newlines inside the message are flattened to spaces; the grid can't
+  // distinguish them from word wrap.
+  let result = '';
+  let prevFull = false;
+  for (let y = promptY; y <= cursorAbsY; y++) {
+    const line = buffer.getLine(y);
+    if (!line) break;
+    const rawFull = line.translateToString(true);
+    const raw =
+      y === cursorAbsY ? line.translateToString(false, 0, buffer.cursorX) : rawFull;
+    let text = stripBoxChars(raw);
+    if (y === promptY) text = text.replace(INPUT_PREFIX, '');
+    text = text.trim();
+    if (text) {
+      result = result === '' ? text : prevFull ? result + text : result + ' ' + text;
+    }
+    // Boxed rows always end at the border, so full-width says nothing there.
+    prevFull = !/^[│┃]/.test(rawFull) && rawFull.length >= term.cols - 1;
+  }
+  return result.trim();
+}
+
 /**
  * Build the keystrokes needed to select a specific option from the prompt.
  *

@@ -31,6 +31,7 @@ import ChatView from './ChatView';
 import {
   detectClaudePrompt,
   detectClaudeWorking,
+  detectClaudeInputText,
   promptsEqual,
   buildPromptSelectionKeys,
   type DetectedPrompt,
@@ -103,6 +104,20 @@ export default function TerminalView({ socket }: TerminalViewProps) {
   // Last interactive-prompt question we alerted on, so the same prompt staying
   // on screen (or its selection cursor moving) doesn't re-notify.
   const lastPromptQuestionRef = useRef<string | null>(null);
+  // Mirror of Claude's TUI input line into the compose bar. Armed briefly by
+  // ESC/↑/↓ taps (interrupt-restore, history cycling). Set-only: it never
+  // clears the bar, never injects keys, and never overwrites text the user
+  // typed themselves (only empty or previously-mirrored bar content).
+  const mirrorArmedUntilRef = useRef(0);
+  const lastMirroredRef = useRef('');
+  const composeTextRef = useRef('');
+  // Consecutive armed-window reads that found the composer empty — two in a
+  // row means the user cleared it in the TUI, so the bar text becomes theirs.
+  const emptyMirrorReadsRef = useRef(0);
+  // Only mirror in terminals that have shown Claude UI ("esc to interrupt" or
+  // a numbered menu) — a plain shell's "❯"/">" prompt must not feed the bar.
+  const sawClaudeRef = useRef(false);
+  const rawModeRef = useRef(false);
   // Per-category cooldown so the same kind of alert can't repeat within 10s,
   // while distinct kinds (input vs done) never block each other.
   const NOTIFY_COOLDOWN = 10_000;
@@ -160,6 +175,7 @@ export default function TerminalView({ socket }: TerminalViewProps) {
       const wasWorking = claudeWorkingRef.current;
       const working = detectClaudeWorking(term);
       claudeWorkingRef.current = working;
+      if (working || detected) sawClaudeRef.current = true;
       if (working) {
         if (doneTimerRef.current !== null) {
           window.clearTimeout(doneTimerRef.current);
@@ -175,6 +191,45 @@ export default function TerminalView({ socket }: TerminalViewProps) {
           if (!claudeDedup('done')) return;
           fireNotification('Claude finished', 'Ready for your next prompt', 'claude-done');
         }, 3000);
+      }
+
+      // Compose-bar mirror: after ESC/↑/↓, Claude redraws its input line with
+      // the restored/cycled text — reflect it into the bar. Skipped while a
+      // numbered menu is up ("❯" there marks the selected option), in raw
+      // mode, and in terminals that have never shown Claude UI.
+      if (
+        Date.now() < mirrorArmedUntilRef.current &&
+        !rawModeRef.current &&
+        !terminalPromptRef.current &&
+        (sawClaudeRef.current || convProjectRef.current || convClaudeSessionRef.current)
+      ) {
+        const inputText = detectClaudeInputText(term);
+        const current = composeTextRef.current;
+        if (inputText) {
+          emptyMirrorReadsRef.current = 0;
+          // A strict prefix of what we already mirrored is a caret-moved-left
+          // artifact (the scrape cuts at the caret), not new input.
+          const caretArtifact =
+            inputText !== lastMirroredRef.current &&
+            lastMirroredRef.current.startsWith(inputText);
+          if (
+            !caretArtifact &&
+            inputText !== current &&
+            (current === '' || current === lastMirroredRef.current)
+          ) {
+            lastMirroredRef.current = inputText;
+            composeTextRef.current = inputText;
+            setComposeText(inputText);
+          }
+        } else if (
+          current !== '' &&
+          current === lastMirroredRef.current &&
+          ++emptyMirrorReadsRef.current >= 2
+        ) {
+          // Composer seen empty twice in a row — the user cleared it in the
+          // TUI. Keep the bar text but drop its "mirrored" status/hint.
+          lastMirroredRef.current = '';
+        }
       }
 
       // Keep the scrolled-up indicator fresh on new output too
@@ -240,6 +295,8 @@ export default function TerminalView({ socket }: TerminalViewProps) {
   // Keep refs in sync
   useEffect(() => { ctrlRef.current = ctrlActive; }, [ctrlActive]);
   useEffect(() => { altRef.current = altActive; }, [altActive]);
+  useEffect(() => { composeTextRef.current = composeText; }, [composeText]);
+  useEffect(() => { rawModeRef.current = rawMode; }, [rawMode]);
 
   const toggleCtrl = useCallback(() => setCtrlActive((p) => !p), []);
   const toggleAlt = useCallback(() => setAltActive((p) => !p), []);
@@ -559,7 +616,17 @@ export default function TerminalView({ socket }: TerminalViewProps) {
   const handleMobileKey = useCallback(
     (data: string) => {
       write(data);
-      if (rawMode) termRef.current?.focus();
+      if (rawMode) {
+        termRef.current?.focus();
+        return;
+      }
+      // ESC restores an interrupted message into Claude's own input line and
+      // ↑/↓ cycle its history — arm the mirror so the compose bar picks up
+      // the redrawn input line when the echo comes back.
+      if (data === '\x1b' || data === '\x1b[A' || data === '\x1b[B') {
+        mirrorArmedUntilRef.current = Date.now() + 2500;
+        emptyMirrorReadsRef.current = 0;
+      }
     },
     [write, rawMode]
   );
@@ -728,6 +795,10 @@ export default function TerminalView({ socket }: TerminalViewProps) {
       write(composeText + '\r');
     }
     setComposeText('');
+    lastMirroredRef.current = '';
+    // Sending ends the interaction the mirror was armed for — don't let the
+    // echo of the just-sent text repopulate the bar.
+    mirrorArmedUntilRef.current = 0;
     composeRef.current?.focus();
   }, [composeText, write]);
 
@@ -754,6 +825,8 @@ export default function TerminalView({ socket }: TerminalViewProps) {
       write(composeText);
     }
     setComposeText('');
+    lastMirroredRef.current = '';
+    mirrorArmedUntilRef.current = 0;
     composeRef.current?.focus();
   }, [composeText, write]);
 
@@ -912,7 +985,12 @@ export default function TerminalView({ socket }: TerminalViewProps) {
             <textarea
               ref={composeRef}
               value={composeText}
-              onChange={(e) => setComposeText(e.target.value)}
+              onChange={(e) => {
+                // Sync the ref in the same task — the mirror's timer must
+                // never see a stale value and overwrite fresh user typing.
+                composeTextRef.current = e.target.value;
+                setComposeText(e.target.value);
+              }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault();
@@ -945,7 +1023,13 @@ export default function TerminalView({ socket }: TerminalViewProps) {
               Send raw (no enter)
             </button>
             <span className="text-[10px] text-text-muted/50">|</span>
-            <span className="text-[10px] text-text-muted/50">Shift+Enter for newline</span>
+            {composeText !== '' && composeText === lastMirroredRef.current ? (
+              <span className="text-[10px] text-claude/80">
+                copied from Claude's input — ESC clears it there
+              </span>
+            ) : (
+              <span className="text-[10px] text-text-muted/50">Shift+Enter for newline</span>
+            )}
           </div>
         </div>
       )}
