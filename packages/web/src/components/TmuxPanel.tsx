@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { Socket } from 'socket.io-client';
-import { TMUX_LIST, TMUX_LIST_RESULT } from '@crc/shared';
-import type { TmuxListResultPayload, TmuxSessionInfo } from '@crc/shared';
+import { TMUX_LIST, TMUX_LIST_RESULT, TMUX_KILL, TMUX_KILL_RESULT } from '@crc/shared';
+import type { TmuxListResultPayload, TmuxKillResultPayload, TmuxSessionInfo } from '@crc/shared';
 import { useAgentStore } from '../stores/agentStore';
+import { useNotificationStore } from '../stores/notificationStore';
 
 interface TmuxPanelProps {
   socket: Socket | null;
@@ -46,16 +47,35 @@ export default function TmuxPanel({ socket, agentId, onClose }: TmuxPanelProps) 
       setError(p.error || '');
       setSessions(p.sessions || []);
     };
+    const onKillResult = (p: TmuxKillResultPayload) => {
+      if (p.agentId && p.agentId !== agentId) return;
+      if (!p.ok) {
+        useNotificationStore.getState().addToast('tmux kill failed', p.error || 'Unknown error');
+      }
+      refresh();
+    };
     socket.on(TMUX_LIST_RESULT, onResult);
+    socket.on(TMUX_KILL_RESULT, onKillResult);
     refresh();
     return () => {
       socket.off(TMUX_LIST_RESULT, onResult);
+      socket.off(TMUX_KILL_RESULT, onKillResult);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [socket, agentId]);
 
   const mirror = (name: string) =>
     navigate(`/terminal/${agentId}/new?tmux=${encodeURIComponent(name)}`);
+  const kill = (name: string) => {
+    if (
+      !window.confirm(
+        `Kill tmux session "${name}"? Everything running inside it (including Claude) will be terminated.`
+      )
+    ) {
+      return;
+    }
+    socket?.emit(TMUX_KILL, { agentId, name, requestId: crypto.randomUUID() });
+  };
   const startSharedClaude = () =>
     navigate(`/terminal/${agentId}/new?tmux=claude&launch=${encodeURIComponent('claude')}`);
 
@@ -90,12 +110,11 @@ export default function TmuxPanel({ socket, agentId, onClose }: TmuxPanelProps) 
         ) : (
           <div className="space-y-2 mb-3">
             {sessions.map((s) => (
-              <button
+              <div
                 key={s.name}
-                onClick={() => mirror(s.name)}
-                className="w-full text-left px-4 py-2.5 rounded-xl border border-border-subtle bg-surface-raised hover:border-accent hover:bg-surface-overlay transition-colors flex items-center justify-between"
+                className="w-full px-4 py-2.5 rounded-xl border border-border-subtle bg-surface-raised flex items-center justify-between gap-3"
               >
-                <div className="min-w-0">
+                <div className="min-w-0 flex-1">
                   <div className="text-sm font-medium text-text font-mono truncate">{s.name}</div>
                   <div className="text-[11px] text-text-muted truncate">
                     {[
@@ -113,8 +132,21 @@ export default function TmuxPanel({ socket, agentId, onClose }: TmuxPanelProps) 
                     </div>
                   )}
                 </div>
-                <span className="text-xs text-accent flex-shrink-0 ml-3">Mirror →</span>
-              </button>
+                <div className="flex flex-col gap-1 flex-shrink-0">
+                  <button
+                    onClick={() => mirror(s.name)}
+                    className="px-2.5 py-1 text-xs bg-accent hover:bg-accent-hover text-white rounded-lg transition-colors"
+                  >
+                    Mirror
+                  </button>
+                  <button
+                    onClick={() => kill(s.name)}
+                    className="px-2.5 py-1 text-xs bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded-lg transition-colors"
+                  >
+                    Kill
+                  </button>
+                </div>
+              </div>
             ))}
           </div>
         )}

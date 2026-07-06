@@ -58,6 +58,8 @@ import {
   CLAUDE_NOTIFY,
   TMUX_LIST,
   TMUX_LIST_RESULT,
+  TMUX_KILL,
+  TMUX_KILL_RESULT,
   AGENT_EXEC,
   AGENT_EXEC_RESULT,
   type FilesListPayload,
@@ -76,6 +78,8 @@ import {
   type ClaudeHookPayload,
   type TmuxListPayload,
   type TmuxListResultPayload,
+  type TmuxKillPayload,
+  type TmuxKillResultPayload,
   type AgentExecPayload,
   type AgentExecResultPayload,
 } from '@crc/shared';
@@ -374,6 +378,13 @@ agentNs.on('connection', (socket) => {
     else clientNs.to(userRoom(ownerUserId)).emit(TMUX_LIST_RESULT, enriched);
   });
 
+  socket.on(TMUX_KILL_RESULT, (payload: TmuxKillResultPayload) => {
+    const enriched = { ...payload, agentId };
+    const target = resolveRpc(payload.requestId, agentId);
+    if (target) clientNs.to(target).emit(TMUX_KILL_RESULT, enriched);
+    else clientNs.to(userRoom(ownerUserId)).emit(TMUX_KILL_RESULT, enriched);
+  });
+
   // --- Agent exec relay (agent -> client) ---
   socket.on(AGENT_EXEC_RESULT, (payload: AgentExecResultPayload) => {
     const enriched = { ...payload, agentId };
@@ -615,6 +626,18 @@ clientNs.on('connection', (socket) => {
     const rid = requestId || uuid();
     trackRpc(rid, socket.id, agentId);
     agentNs.to(agentSocketId).emit(TMUX_LIST, { requestId: rid });
+  });
+
+  // --- tmux session kill (client -> agent) ---
+  socket.on(TMUX_KILL, (payload: TmuxKillPayload) => {
+    const { agentId, name, requestId } = payload;
+    if (!agentId || !name) return;
+    if (!assertOwnsAgent(userId, agentId)) return;
+    const agentSocketId = getAgentSocketId(agentId);
+    if (!agentSocketId) return;
+    const rid = requestId || uuid();
+    trackRpc(rid, socket.id, agentId);
+    agentNs.to(agentSocketId).emit(TMUX_KILL, { requestId: rid, name });
   });
 
   // --- File explorer relay (client -> agent) ---

@@ -42,6 +42,22 @@ export async function listTmuxSessions(): Promise<TmuxSessionInfo[]> {
   }
 }
 
+/**
+ * Kill a tmux session by exact name (`=` prefix disables tmux's
+ * prefix-matching, so "claude" can never kill "claude-2"). Everything running
+ * inside the session dies with it.
+ */
+export async function killTmuxSession(name: string): Promise<{ ok: boolean; error?: string }> {
+  const { file, args } = tmuxCmd(['kill-session', '-t', `=${name}`]);
+  try {
+    await execFileAsync(file, args, { timeout: 6000 });
+    return { ok: true };
+  } catch (err: any) {
+    const msg = (err?.stderr || err?.message || 'tmux kill failed').toString().trim();
+    return { ok: false, error: msg };
+  }
+}
+
 interface PaneInfo {
   session: string;
   pid: number;

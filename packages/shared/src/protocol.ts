@@ -85,6 +85,10 @@ export const CLAUDE_NOTIFY = 'claude:notify' as const;
 export const TMUX_LIST = 'tmux:list' as const;
 // Agent -> Server -> Client
 export const TMUX_LIST_RESULT = 'tmux:list:result' as const;
+// Client -> Server -> Agent
+export const TMUX_KILL = 'tmux:kill' as const;
+// Agent -> Server -> Client
+export const TMUX_KILL_RESULT = 'tmux:kill:result' as const;
 
 // --- Payload types ---
 export interface TerminalOutputPayload {
@@ -297,6 +301,20 @@ export interface TmuxListResultPayload {
   requestId?: string;
   agentId?: string;
   sessions: TmuxSessionInfo[];
+  error?: string;
+}
+
+export interface TmuxKillPayload {
+  agentId?: string;
+  name: string;
+  requestId?: string;
+}
+
+export interface TmuxKillResultPayload {
+  requestId?: string;
+  agentId?: string;
+  name: string;
+  ok: boolean;
   error?: string;
 }
 

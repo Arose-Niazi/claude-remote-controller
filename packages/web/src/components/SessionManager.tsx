@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import type { Socket } from 'socket.io-client';
-import { SESSION_LIST, SESSION_KILL, SESSION_KILL_ALL, SESSION_RENAME, AGENT_EXEC, AGENT_EXEC_RESULT, TMUX_LIST, TMUX_LIST_RESULT } from '@crc/shared';
-import type { TerminalSession, AgentExecResultPayload, TmuxSessionInfo, TmuxListResultPayload } from '@crc/shared';
+import { SESSION_LIST, SESSION_KILL, SESSION_KILL_ALL, SESSION_RENAME, AGENT_EXEC, AGENT_EXEC_RESULT, TMUX_LIST, TMUX_LIST_RESULT, TMUX_KILL, TMUX_KILL_RESULT } from '@crc/shared';
+import type { TerminalSession, AgentExecResultPayload, TmuxSessionInfo, TmuxListResultPayload, TmuxKillResultPayload } from '@crc/shared';
 import { useSessionStore } from '../stores/sessionStore';
+import { useNotificationStore } from '../stores/notificationStore';
 import VpnPanel from './VpnPanel';
 import ClaudeSessions from './ClaudeSessions';
 import FileExplorer from './FileExplorer';
@@ -63,30 +64,43 @@ export default function SessionManager({ socket }: SessionManagerProps) {
     }
   }, [socket, agentId]);
 
+  const requestTmuxList = useCallback(() => {
+    if (!socket || !agentId) return;
+    const requestId = crypto.randomUUID();
+    tmuxReqRef.current = requestId;
+    socket.emit(TMUX_LIST, { agentId, requestId });
+  }, [socket, agentId]);
+
   // Fetch the machine's tmux sessions for the inline list. Re-fetched when the
   // tab regains focus so the list stays fresh without a manual refresh.
   useEffect(() => {
     if (!socket || !agentId) return;
-    const request = () => {
-      const requestId = crypto.randomUUID();
-      tmuxReqRef.current = requestId;
-      socket.emit(TMUX_LIST, { agentId, requestId });
-    };
     const onResult = (p: TmuxListResultPayload) => {
       if (p.requestId && p.requestId !== tmuxReqRef.current) return;
       if (p.agentId && p.agentId !== agentId) return;
       const list = p.error ? [] : p.sessions || [];
       setTmuxSessions([...list].sort((a, b) => (b.activity || 0) - (a.activity || 0)));
     };
-    const onFocus = () => request();
+    const onKillResult = (p: TmuxKillResultPayload) => {
+      if (p.agentId && p.agentId !== agentId) return;
+      if (p.ok) {
+        setTmuxSessions((prev) => prev.filter((t) => t.name !== p.name));
+      } else {
+        useNotificationStore.getState().addToast('tmux kill failed', p.error || 'Unknown error');
+      }
+      requestTmuxList();
+    };
+    const onFocus = () => requestTmuxList();
     socket.on(TMUX_LIST_RESULT, onResult);
+    socket.on(TMUX_KILL_RESULT, onKillResult);
     window.addEventListener('focus', onFocus);
-    request();
+    requestTmuxList();
     return () => {
       socket.off(TMUX_LIST_RESULT, onResult);
+      socket.off(TMUX_KILL_RESULT, onKillResult);
       window.removeEventListener('focus', onFocus);
     };
-  }, [socket, agentId]);
+  }, [socket, agentId, requestTmuxList]);
 
   // Clean up any pending settings-write listener on unmount.
   useEffect(() => {
@@ -104,6 +118,17 @@ export default function SessionManager({ socket }: SessionManagerProps) {
 
   function handleMirror(name: string) {
     navigate(`/terminal/${agentId}/new?tmux=${encodeURIComponent(name)}`);
+  }
+
+  function handleTmuxKill(name: string) {
+    if (
+      !window.confirm(
+        `Kill tmux session "${name}"? Everything running inside it (including Claude) will be terminated.`
+      )
+    ) {
+      return;
+    }
+    socket?.emit(TMUX_KILL, { agentId, name, requestId: crypto.randomUUID() });
   }
 
   function handleConnect(session: TerminalSession) {
@@ -407,12 +432,11 @@ export default function SessionManager({ socket }: SessionManagerProps) {
           </div>
           <div className="space-y-3">
             {tmuxSessions.map((s) => (
-              <button
+              <div
                 key={s.name}
-                onClick={() => handleMirror(s.name)}
-                className="w-full text-left rounded-2xl border border-border bg-surface-raised p-4 hover:border-accent hover:bg-surface-overlay transition-colors flex items-center justify-between"
+                className="rounded-2xl border border-border bg-surface-raised p-4 flex items-center justify-between gap-3"
               >
-                <div className="min-w-0">
+                <div className="min-w-0 flex-1">
                   <div className="text-sm font-medium text-text font-mono truncate">{s.name}</div>
                   <div className="text-[11px] text-text-muted mt-0.5 truncate">
                     {[
@@ -430,8 +454,21 @@ export default function SessionManager({ socket }: SessionManagerProps) {
                     </div>
                   )}
                 </div>
-                <span className="text-xs text-accent flex-shrink-0 ml-3">Mirror →</span>
-              </button>
+                <div className="flex flex-col gap-1.5 flex-shrink-0">
+                  <button
+                    onClick={() => handleMirror(s.name)}
+                    className="px-3 py-1.5 text-xs bg-accent hover:bg-accent-hover text-white rounded-lg transition-colors"
+                  >
+                    Mirror
+                  </button>
+                  <button
+                    onClick={() => handleTmuxKill(s.name)}
+                    className="px-3 py-1.5 text-xs bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded-lg transition-colors"
+                  >
+                    Kill
+                  </button>
+                </div>
+              </div>
             ))}
           </div>
         </div>

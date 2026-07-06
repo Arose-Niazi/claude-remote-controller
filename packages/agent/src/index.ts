@@ -29,6 +29,8 @@ import {
   CLAUDE_HOOK,
   TMUX_LIST,
   TMUX_LIST_RESULT,
+  TMUX_KILL,
+  TMUX_KILL_RESULT,
   AGENT_EXEC,
   AGENT_EXEC_RESULT,
   HEARTBEAT_INTERVAL,
@@ -46,6 +48,7 @@ import {
   type ClaudeConvReadPayload,
   type ClaudeHookPayload,
   type TmuxListPayload,
+  type TmuxKillPayload,
   type AgentExecPayload,
 } from '@crc/shared';
 
@@ -53,7 +56,7 @@ import { loadConfig, isConfigured, LOCAL_CONTROL_PORT } from './config.js';
 import { logger } from './logger.js';
 import { installClaudeHooks, normalizeClaudeHook, lastAssistantSummary } from './claude-plugin-installer.js';
 import { startLocalControl } from './local-control.js';
-import { listTmuxSessions, buildTmuxLaunch } from './tmux.js';
+import { listTmuxSessions, buildTmuxLaunch, killTmuxSession } from './tmux.js';
 import { detectShell } from './shell.js';
 import { buildHeartbeat } from './heartbeat.js';
 import { listDirectory, downloadFile } from './file-explorer.js';
@@ -196,6 +199,15 @@ socket.on(TMUX_LIST, async (payload: TmuxListPayload) => {
   } catch (err: any) {
     socket.emit(TMUX_LIST_RESULT, { requestId, sessions: [], error: err?.message || 'tmux list failed' });
   }
+});
+
+// --- tmux session kill ---
+socket.on(TMUX_KILL, async (payload: TmuxKillPayload) => {
+  const { requestId, name } = payload;
+  if (!requestId || !name) return;
+  const result = await killTmuxSession(name);
+  logger.info({ name, ok: result.ok, error: result.error }, 'tmux kill requested');
+  socket.emit(TMUX_KILL_RESULT, { requestId, name, ok: result.ok, error: result.error });
 });
 
 socket.on(TERMINAL_INPUT, (payload: TerminalInputPayload) => {
