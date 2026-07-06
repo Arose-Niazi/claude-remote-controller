@@ -265,8 +265,14 @@ export function detectClaudeInputText(term: Terminal): string {
     if (text) {
       result = result === '' ? text : prevFull ? result + text : result + ' ' + text;
     }
-    // Boxed rows always end at the border, so full-width says nothing there.
-    prevFull = !/^[│┃]/.test(rawFull) && rawFull.length >= term.cols - 1;
+    // Hard mid-token break iff the row's last column cell is occupied — a
+    // word-wrapped row leaves it blank (the swallowed space). Boxed rows
+    // always end at the border, so the check says nothing there.
+    const untrimmed = line.translateToString(false);
+    prevFull =
+      !/^[│┃]/.test(rawFull) &&
+      untrimmed.length >= term.cols &&
+      untrimmed[term.cols - 1] !== ' ';
   }
   return result.trim();
 }
