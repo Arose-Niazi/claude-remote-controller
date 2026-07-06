@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import type { Socket } from 'socket.io-client';
-import { SESSION_LIST, SESSION_KILL, SESSION_KILL_ALL, SESSION_RENAME, AGENT_EXEC, AGENT_EXEC_RESULT } from '@crc/shared';
-import type { TerminalSession, AgentExecResultPayload } from '@crc/shared';
+import { SESSION_LIST, SESSION_KILL, SESSION_KILL_ALL, SESSION_RENAME, AGENT_EXEC, AGENT_EXEC_RESULT, TMUX_LIST, TMUX_LIST_RESULT } from '@crc/shared';
+import type { TerminalSession, AgentExecResultPayload, TmuxSessionInfo, TmuxListResultPayload } from '@crc/shared';
 import { useSessionStore } from '../stores/sessionStore';
 import VpnPanel from './VpnPanel';
 import ClaudeSessions from './ClaudeSessions';
@@ -33,6 +33,10 @@ export default function SessionManager({ socket }: SessionManagerProps) {
   const [showBrowse, setShowBrowse] = useState(false);
   const [showTmux, setShowTmux] = useState(false);
   const [permPrompt, setPermPrompt] = useState<{ path: string } | null>(null);
+  // tmux sessions on the agent machine, shown inline so mirroring one doesn't
+  // require opening the Warp overlay.
+  const [tmuxSessions, setTmuxSessions] = useState<TmuxSessionInfo[]>([]);
+  const tmuxReqRef = useRef<string | null>(null);
   const agents = useAgentStore((s) => s.agents);
   const agent = agents.find((a) => a.id === agentId);
   const browseInitialPath = agent?.homeDirectory || '/';
@@ -56,6 +60,31 @@ export default function SessionManager({ socket }: SessionManagerProps) {
     }
   }, [socket, agentId]);
 
+  // Fetch the machine's tmux sessions for the inline list. Re-fetched when the
+  // tab regains focus so the list stays fresh without a manual refresh.
+  useEffect(() => {
+    if (!socket || !agentId) return;
+    const request = () => {
+      const requestId = crypto.randomUUID();
+      tmuxReqRef.current = requestId;
+      socket.emit(TMUX_LIST, { agentId, requestId });
+    };
+    const onResult = (p: TmuxListResultPayload) => {
+      if (p.requestId && p.requestId !== tmuxReqRef.current) return;
+      if (p.agentId && p.agentId !== agentId) return;
+      const list = p.error ? [] : p.sessions || [];
+      setTmuxSessions([...list].sort((a, b) => (b.activity || 0) - (a.activity || 0)));
+    };
+    const onFocus = () => request();
+    socket.on(TMUX_LIST_RESULT, onResult);
+    window.addEventListener('focus', onFocus);
+    request();
+    return () => {
+      socket.off(TMUX_LIST_RESULT, onResult);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [socket, agentId]);
+
   // Clean up any pending settings-write listener on unmount.
   useEffect(() => {
     return () => {
@@ -68,6 +97,10 @@ export default function SessionManager({ socket }: SessionManagerProps) {
 
   function handleCreate() {
     navigate(`/terminal/${agentId}/new`);
+  }
+
+  function handleMirror(name: string) {
+    navigate(`/terminal/${agentId}/new?tmux=${encodeURIComponent(name)}`);
   }
 
   function handleConnect(session: TerminalSession) {
@@ -348,6 +381,32 @@ export default function SessionManager({ socket }: SessionManagerProps) {
         >
           Kill All Sessions
         </button>
+      )}
+
+      {tmuxSessions.length > 0 && (
+        <div className="mt-6">
+          <div className="text-xs font-medium text-text-muted uppercase tracking-wider mb-2">
+            Warp / tmux on this machine
+          </div>
+          <div className="space-y-3">
+            {tmuxSessions.map((s) => (
+              <button
+                key={s.name}
+                onClick={() => handleMirror(s.name)}
+                className="w-full text-left rounded-2xl border border-border bg-surface-raised p-4 hover:border-accent hover:bg-surface-overlay transition-colors flex items-center justify-between"
+              >
+                <div className="min-w-0">
+                  <div className="text-sm font-medium text-text font-mono truncate">{s.name}</div>
+                  <div className="text-[11px] text-text-muted mt-0.5">
+                    {s.windows} window{s.windows === 1 ? '' : 's'}
+                    {s.attached ? ' · attached on PC' : ''}
+                  </div>
+                </div>
+                <span className="text-xs text-accent flex-shrink-0 ml-3">Mirror →</span>
+              </button>
+            ))}
+          </div>
+        </div>
       )}
     </div>
   );

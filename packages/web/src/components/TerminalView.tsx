@@ -464,7 +464,9 @@ export default function TerminalView({ socket }: TerminalViewProps) {
       // what runs in Warp/tmux on the PC).
       const tmux = searchParams.get('tmux') || undefined;
       const launch = searchParams.get('launch') || undefined;
-      create(term.cols, term.rows, undefined, tmux ? { tmux, launch } : undefined);
+      // Name tmux mirrors after their target so they're identifiable in the
+      // session list (instead of the generic "Session N").
+      create(term.cols, term.rows, tmux ? `tmux: ${tmux}` : undefined, tmux ? { tmux, launch } : undefined);
     } else if (paramSessionId) {
       attach(paramSessionId, term.cols, term.rows);
     }
