@@ -56,6 +56,7 @@ import { loadConfig, isConfigured, LOCAL_CONTROL_PORT } from './config.js';
 import { logger } from './logger.js';
 import { installClaudeHooks, normalizeClaudeHook, lastAssistantSummary } from './claude-plugin-installer.js';
 import { startLocalControl } from './local-control.js';
+import { ensurePtyHelperExecutable } from './pty-helper-fix.js';
 import { listTmuxSessions, buildTmuxLaunch, killTmuxSession } from './tmux.js';
 import { buildHeartbeat } from './heartbeat.js';
 import { listDirectory, downloadFile } from './file-explorer.js';
@@ -82,6 +83,10 @@ if (!isConfigured()) {
 
 const config = loadConfig();
 logger.info({ agentId: config.agentId, serverUrl: config.serverUrl }, 'Starting agent');
+
+// node-pty's spawn-helper often loses its execute bit on npm install — restore
+// it before any PTY is spawned, or pty.fork() fails with "posix_spawnp failed".
+ensurePtyHelperExecutable();
 
 // --- Process-level safety nets: keep the agent (and its PTYs) alive on unexpected errors ---
 process.on('unhandledRejection', (reason) => {
