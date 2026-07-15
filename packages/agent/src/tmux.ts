@@ -102,10 +102,12 @@ export async function killTmuxSession(name: string): Promise<{ ok: boolean; erro
  */
 export async function scrollTmux(
   name: string,
-  direction: 'up' | 'down' | 'exit'
+  direction: 'up' | 'down' | 'exit',
+  lines = 12
 ): Promise<{ inCopyMode: boolean }> {
   const bin = resolveTmuxPath();
   if (!bin) return { inCopyMode: false };
+  const n = Math.max(1, Math.min(200, Math.round(lines)));
   // NB: pane-targeting commands (copy-mode/send-keys/display-message) take a
   // target-PANE; the `=name` exact-session prefix is only valid for session
   // targets (kill-session) and makes these fail with "can't find pane". A bare
@@ -128,12 +130,12 @@ export async function scrollTmux(
   if (direction === 'up') {
     // Enter copy-mode only if not already in it — re-entering resets to bottom.
     if (!(await inMode())) await run(['copy-mode', '-t', target]);
-    await run(['send-keys', '-t', target, '-X', 'halfpage-up']);
+    await run(['send-keys', '-t', target, '-N', String(n), '-X', 'scroll-up']);
     return { inCopyMode: true };
   }
   // down — only meaningful while scrolled up; auto-exit when back at the bottom
   if (!(await inMode())) return { inCopyMode: false };
-  await run(['send-keys', '-t', target, '-X', 'halfpage-down']);
+  await run(['send-keys', '-t', target, '-N', String(n), '-X', 'scroll-down']);
   try {
     const { stdout } = await execFileAsync(bin, ['display-message', '-t', target, '-p', '#{scroll_position}'], { timeout: 3000 });
     if ((parseInt(stdout.trim(), 10) || 0) === 0) {

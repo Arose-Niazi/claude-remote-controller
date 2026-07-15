@@ -257,10 +257,10 @@ socket.on(TMUX_KILL, async (payload: TmuxKillPayload) => {
 
 // --- tmux scroll (copy-mode) ---
 socket.on(TMUX_SCROLL, async (payload: TmuxScrollPayload) => {
-  const { sessionId, direction } = payload;
+  const { sessionId, direction, lines } = payload;
   const name = sessionId && sessionTmuxName.get(sessionId);
   if (!name) return;
-  const { inCopyMode } = await scrollTmux(name, direction);
+  const { inCopyMode } = await scrollTmux(name, direction, lines);
   sessionInCopyMode.set(sessionId, inCopyMode);
 });
 

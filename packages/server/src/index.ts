@@ -644,12 +644,12 @@ clientNs.on('connection', (socket) => {
 
   // --- tmux scroll (client -> agent) ---
   socket.on(TMUX_SCROLL, (payload: TmuxScrollPayload) => {
-    const { agentId, sessionId, direction } = payload;
+    const { agentId, sessionId, direction, lines } = payload;
     if (!agentId || !sessionId || !direction) return;
     if (!assertOwnsAgent(userId, agentId)) return;
     const agentSocketId = getAgentSocketId(agentId);
     if (!agentSocketId) return;
-    agentNs.to(agentSocketId).emit(TMUX_SCROLL, { sessionId, direction });
+    agentNs.to(agentSocketId).emit(TMUX_SCROLL, { sessionId, direction, lines });
   });
 
   // --- File explorer relay (client -> agent) ---

@@ -322,6 +322,7 @@ export interface TmuxScrollPayload {
   agentId?: string;
   sessionId: string; // the terminal (PTY) session that mirrors a tmux session
   direction: 'up' | 'down' | 'exit';
+  lines?: number; // how many lines to scroll (default 12 ≈ half a page)
 }
 
 export interface TmuxKillResultPayload {

@@ -10,6 +10,7 @@ import {
   CLAUDE_CONV_READ,
   CLAUDE_CONV_DATA,
   TMUX_SCROLL,
+  SESSION_LIST,
   FILES_DOWNLOAD,
   FILES_DOWNLOAD_READY,
   FILES_DOWNLOAD_ERROR,
@@ -278,6 +279,71 @@ export default function TerminalView({ socket }: TerminalViewProps) {
   const isTmuxMirror =
     !!searchParams.get('tmux') ||
     (storeSessions.find((s) => s.id === sessionId)?.name?.startsWith('tmux: ') ?? false);
+
+  // Populate the session store so isTmuxMirror resolves when reattaching to a
+  // mirror directly (e.g. Connect on PC), where the URL has no ?tmux= param.
+  useEffect(() => {
+    if (socket && agentId) socket.emit(SESSION_LIST, { agentId });
+  }, [socket, agentId]);
+
+  // Natural scrolling for tmux mirrors (its alt-screen has no xterm scrollback):
+  // mouse wheel on desktop and touch-drag on mobile both drive tmux scroll,
+  // by a few lines each, throttled. The ⬆/⬇ buttons remain as a fallback.
+  const scrollTmuxBy = useCallback(
+    (direction: 'up' | 'down', lines: number) => {
+      if (!isTmuxMirror || !sessionId || !socket) return;
+      socket.emit(TMUX_SCROLL, { agentId, sessionId, direction, lines });
+    },
+    [isTmuxMirror, sessionId, socket, agentId]
+  );
+
+  const lastWheelRef = useRef(0);
+  const handleTmuxWheel = useCallback(
+    (e: React.WheelEvent) => {
+      if (!isTmuxMirror || e.deltaY === 0) return;
+      const now = Date.now();
+      if (now - lastWheelRef.current < 80) return;
+      lastWheelRef.current = now;
+      scrollTmuxBy(e.deltaY < 0 ? 'up' : 'down', 3);
+    },
+    [isTmuxMirror, scrollTmuxBy]
+  );
+
+  // Touch-drag → scroll. Dragging the content DOWN reveals earlier history
+  // (scroll up), matching native scrolling. Accumulated drag is coalesced into
+  // one scroll (of N lines) at most every ~60ms, so a fast flick is one command
+  // rather than a burst of process spawns on the agent.
+  const touchYRef = useRef<number | null>(null);
+  const touchAccumRef = useRef(0);
+  const lastTouchEmitRef = useRef(0);
+  const PX_PER_LINE = 9;
+  const handleTouchStart = useCallback(
+    (e: React.TouchEvent) => {
+      if (!isTmuxMirror) return;
+      touchYRef.current = e.touches[0].clientY;
+      touchAccumRef.current = 0;
+    },
+    [isTmuxMirror]
+  );
+  const handleTouchMove = useCallback(
+    (e: React.TouchEvent) => {
+      if (!isTmuxMirror || touchYRef.current === null) return;
+      const y = e.touches[0].clientY;
+      touchAccumRef.current += y - touchYRef.current;
+      touchYRef.current = y;
+      const now = Date.now();
+      if (now - lastTouchEmitRef.current < 60) return;
+      const lines = Math.trunc(touchAccumRef.current / PX_PER_LINE);
+      if (lines === 0) return;
+      lastTouchEmitRef.current = now;
+      touchAccumRef.current -= lines * PX_PER_LINE;
+      scrollTmuxBy(lines > 0 ? 'up' : 'down', Math.min(40, Math.abs(lines)));
+    },
+    [isTmuxMirror, scrollTmuxBy]
+  );
+  const handleTouchEnd = useCallback(() => {
+    touchYRef.current = null;
+  }, []);
 
   // Notify when Claude shows an interactive prompt (permission / selection),
   // once per distinct question so a moving selection cursor or redraw doesn't
@@ -951,7 +1017,13 @@ export default function TerminalView({ socket }: TerminalViewProps) {
       </div>
 
       {/* Main content area */}
-      <div className="flex-1 overflow-hidden relative">
+      <div
+        className="flex-1 overflow-hidden relative"
+        onWheel={handleTmuxWheel}
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
+      >
         {/* xterm.js terminal — visible in TTY mode or when no conversation */}
         <div
           ref={termContainerRef}
