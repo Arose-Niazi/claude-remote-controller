@@ -9,7 +9,6 @@ import {
   TERMINAL_OUTPUT,
   CLAUDE_CONV_READ,
   CLAUDE_CONV_DATA,
-  TMUX_SCROLL,
   SESSION_LIST,
   FILES_DOWNLOAD,
   FILES_DOWNLOAD_READY,
@@ -286,15 +285,19 @@ export default function TerminalView({ socket }: TerminalViewProps) {
     if (socket && agentId) socket.emit(SESSION_LIST, { agentId });
   }, [socket, agentId]);
 
-  // Natural scrolling for tmux mirrors (its alt-screen has no xterm scrollback):
-  // mouse wheel on desktop and touch-drag on mobile both drive tmux scroll,
-  // by a few lines each, throttled. The ⬆/⬇ buttons remain as a fallback.
-  const scrollTmuxBy = useCallback(
-    (direction: 'up' | 'down', lines: number) => {
-      if (!isTmuxMirror || !sessionId || !socket) return;
-      socket.emit(TMUX_SCROLL, { agentId, sessionId, direction, lines });
+  // Natural scrolling for tmux mirrors. The mirror shows a full-screen app
+  // (usually Claude Code) on the alternate screen — tmux itself has no
+  // scrollback, and the app manages its own. So we forward mouse-WHEEL events
+  // to the PTY: tmux (mouse off) passes them to the app, which scrolls its own
+  // view — exactly like the desktop terminal does. SGR encoding, button 64=up
+  // 65=down, at a fixed in-bounds position (full-screen apps ignore position).
+  const sendScroll = useCallback(
+    (direction: 'up' | 'down', count: number) => {
+      if (!isTmuxMirror) return;
+      const btn = direction === 'up' ? 64 : 65;
+      write(`\x1b[<${btn};3;3M`.repeat(Math.max(1, Math.min(60, count))));
     },
-    [isTmuxMirror, sessionId, socket, agentId]
+    [isTmuxMirror, write]
   );
 
   const lastWheelRef = useRef(0);
@@ -302,21 +305,20 @@ export default function TerminalView({ socket }: TerminalViewProps) {
     (e: React.WheelEvent) => {
       if (!isTmuxMirror || e.deltaY === 0) return;
       const now = Date.now();
-      if (now - lastWheelRef.current < 80) return;
+      if (now - lastWheelRef.current < 60) return;
       lastWheelRef.current = now;
-      scrollTmuxBy(e.deltaY < 0 ? 'up' : 'down', 3);
+      sendScroll(e.deltaY < 0 ? 'up' : 'down', 3);
     },
-    [isTmuxMirror, scrollTmuxBy]
+    [isTmuxMirror, sendScroll]
   );
 
   // Touch-drag → scroll. Dragging the content DOWN reveals earlier history
   // (scroll up), matching native scrolling. Accumulated drag is coalesced into
-  // one scroll (of N lines) at most every ~60ms, so a fast flick is one command
-  // rather than a burst of process spawns on the agent.
+  // one forward at most every ~50ms so a fast flick isn't a flood of events.
   const touchYRef = useRef<number | null>(null);
   const touchAccumRef = useRef(0);
   const lastTouchEmitRef = useRef(0);
-  const PX_PER_LINE = 9;
+  const PX_PER_TICK = 12;
   const handleTouchStart = useCallback(
     (e: React.TouchEvent) => {
       if (!isTmuxMirror) return;
@@ -332,14 +334,14 @@ export default function TerminalView({ socket }: TerminalViewProps) {
       touchAccumRef.current += y - touchYRef.current;
       touchYRef.current = y;
       const now = Date.now();
-      if (now - lastTouchEmitRef.current < 60) return;
-      const lines = Math.trunc(touchAccumRef.current / PX_PER_LINE);
-      if (lines === 0) return;
+      if (now - lastTouchEmitRef.current < 50) return;
+      const ticks = Math.trunc(touchAccumRef.current / PX_PER_TICK);
+      if (ticks === 0) return;
       lastTouchEmitRef.current = now;
-      touchAccumRef.current -= lines * PX_PER_LINE;
-      scrollTmuxBy(lines > 0 ? 'up' : 'down', Math.min(40, Math.abs(lines)));
+      touchAccumRef.current -= ticks * PX_PER_TICK;
+      sendScroll(ticks > 0 ? 'up' : 'down', Math.min(20, Math.abs(ticks)));
     },
-    [isTmuxMirror, scrollTmuxBy]
+    [isTmuxMirror, sendScroll]
   );
   const handleTouchEnd = useCallback(() => {
     touchYRef.current = null;
@@ -957,15 +959,15 @@ export default function TerminalView({ socket }: TerminalViewProps) {
         {isTmuxMirror && sessionId && (
           <div className="flex gap-1 flex-shrink-0">
             <button
-              onClick={() => socket?.emit(TMUX_SCROLL, { agentId, sessionId, direction: 'up' })}
-              title="Scroll up (tmux history)"
+              onClick={() => sendScroll('up', 5)}
+              title="Scroll up"
               className="px-2 py-1 text-xs bg-surface-raised hover:bg-surface-overlay border border-border-subtle text-text-secondary rounded-lg transition-colors whitespace-nowrap"
             >
               ⬆
             </button>
             <button
-              onClick={() => socket?.emit(TMUX_SCROLL, { agentId, sessionId, direction: 'down' })}
-              title="Scroll down (tmux history)"
+              onClick={() => sendScroll('down', 5)}
+              title="Scroll down"
               className="px-2 py-1 text-xs bg-surface-raised hover:bg-surface-overlay border border-border-subtle text-text-secondary rounded-lg transition-colors whitespace-nowrap"
             >
               ⬇
