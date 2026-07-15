@@ -9,6 +9,7 @@ import {
   TERMINAL_OUTPUT,
   CLAUDE_CONV_READ,
   CLAUDE_CONV_DATA,
+  TMUX_SCROLL,
   FILES_DOWNLOAD,
   FILES_DOWNLOAD_READY,
   FILES_DOWNLOAD_ERROR,
@@ -24,6 +25,7 @@ import type {
 import { useTerminal } from '../hooks/useTerminal';
 import { useAuthStore } from '../stores/authStore';
 import { useAgentStore } from '../stores/agentStore';
+import { useSessionStore } from '../stores/sessionStore';
 import MobileKeyboard from './MobileKeyboard';
 import FileExplorer from './FileExplorer';
 import FileNotifications from './FileNotifications';
@@ -268,6 +270,14 @@ export default function TerminalView({ socket }: TerminalViewProps) {
       setTimeout(() => navigate(`/sessions/${agentId}`), 1500);
     },
   });
+
+  // A tmux mirror: from the ?tmux= launch param, or a reattached session whose
+  // name we set to "tmux: <target>". These need the scroll controls because
+  // tmux's alt-screen bypasses xterm's own scrollback.
+  const storeSessions = useSessionStore((s) => s.sessions);
+  const isTmuxMirror =
+    !!searchParams.get('tmux') ||
+    (storeSessions.find((s) => s.id === sessionId)?.name?.startsWith('tmux: ') ?? false);
 
   // Notify when Claude shows an interactive prompt (permission / selection),
   // once per distinct question so a moving selection cursor or redraw doesn't
@@ -878,6 +888,24 @@ export default function TerminalView({ socket }: TerminalViewProps) {
           ←
         </button>
         <span className="text-xs text-text-muted truncate min-w-0">{agentId}</span>
+        {isTmuxMirror && sessionId && (
+          <div className="flex gap-1 flex-shrink-0">
+            <button
+              onClick={() => socket?.emit(TMUX_SCROLL, { agentId, sessionId, direction: 'up' })}
+              title="Scroll up (tmux history)"
+              className="px-2 py-1 text-xs bg-surface-raised hover:bg-surface-overlay border border-border-subtle text-text-secondary rounded-lg transition-colors whitespace-nowrap"
+            >
+              ⬆
+            </button>
+            <button
+              onClick={() => socket?.emit(TMUX_SCROLL, { agentId, sessionId, direction: 'down' })}
+              title="Scroll down (tmux history)"
+              className="px-2 py-1 text-xs bg-surface-raised hover:bg-surface-overlay border border-border-subtle text-text-secondary rounded-lg transition-colors whitespace-nowrap"
+            >
+              ⬇
+            </button>
+          </div>
+        )}
         <div className="flex gap-1 ml-auto flex-shrink-0">
           <button
             onClick={handleCopy}

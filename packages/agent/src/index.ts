@@ -31,6 +31,7 @@ import {
   TMUX_LIST_RESULT,
   TMUX_KILL,
   TMUX_KILL_RESULT,
+  TMUX_SCROLL,
   AGENT_EXEC,
   AGENT_EXEC_RESULT,
   HEARTBEAT_INTERVAL,
@@ -49,6 +50,7 @@ import {
   type ClaudeHookPayload,
   type TmuxListPayload,
   type TmuxKillPayload,
+  type TmuxScrollPayload,
   type AgentExecPayload,
 } from '@crc/shared';
 
@@ -58,7 +60,7 @@ import { installClaudeHooks, normalizeClaudeHook, lastAssistantSummary } from '.
 import { startLocalControl } from './local-control.js';
 import { ensurePtyHelperExecutable } from './pty-helper-fix.js';
 import { acquireSingleInstanceLock } from './single-instance.js';
-import { listTmuxSessions, buildTmuxLaunch, killTmuxSession } from './tmux.js';
+import { listTmuxSessions, buildTmuxLaunch, killTmuxSession, scrollTmux } from './tmux.js';
 import { buildHeartbeat } from './heartbeat.js';
 import { listDirectory, downloadFile } from './file-explorer.js';
 import { getProfiles, connectVpn, disconnectVpn } from './vpn-manager.js';
@@ -183,10 +185,16 @@ startLocalControl(LOCAL_CONTROL_PORT, (raw: ClaudeHookPayload) => {
   }
 });
 
+// Which tmux session each terminal mirrors, and whether it's currently scrolled
+// (in copy-mode) so typed input can auto-exit copy-mode first.
+const sessionTmuxName = new Map<string, string>();
+const sessionInCopyMode = new Map<string, boolean>();
+
 // --- Terminal event handlers ---
 socket.on(TERMINAL_OPEN, (payload: TerminalOpenPayload) => {
   const { sessionId, cols, rows, tmux, launch } = payload;
   if (!sessionId) return;
+  if (tmux) sessionTmuxName.set(sessionId, tmux);
 
   // If a tmux session was requested, attach (or create) it so the session is
   // shared with Warp/tmux on the PC (via WSL on Windows, native tmux elsewhere).
@@ -219,6 +227,8 @@ socket.on(TERMINAL_OPEN, (payload: TerminalOpenPayload) => {
     },
     (sid, exitCode) => {
       socket.emit(TERMINAL_EXIT, { sessionId: sid, exitCode });
+      sessionTmuxName.delete(sid);
+      sessionInCopyMode.delete(sid);
     },
     launchSpec
   );
@@ -245,7 +255,23 @@ socket.on(TMUX_KILL, async (payload: TmuxKillPayload) => {
   socket.emit(TMUX_KILL_RESULT, { requestId, name, ok: result.ok, error: result.error });
 });
 
+// --- tmux scroll (copy-mode) ---
+socket.on(TMUX_SCROLL, async (payload: TmuxScrollPayload) => {
+  const { sessionId, direction } = payload;
+  const name = sessionId && sessionTmuxName.get(sessionId);
+  if (!name) return;
+  const { inCopyMode } = await scrollTmux(name, direction);
+  sessionInCopyMode.set(sessionId, inCopyMode);
+});
+
 socket.on(TERMINAL_INPUT, (payload: TerminalInputPayload) => {
+  // Typing while scrolled up would run copy-mode commands, not reach the shell.
+  // Exit copy-mode first so the keystrokes land as input.
+  const name = sessionTmuxName.get(payload.sessionId);
+  if (name && sessionInCopyMode.get(payload.sessionId)) {
+    sessionInCopyMode.set(payload.sessionId, false);
+    scrollTmux(name, 'exit').catch(() => {});
+  }
   writeToSession(payload.sessionId, payload.data);
 });
 
@@ -255,6 +281,8 @@ socket.on(TERMINAL_RESIZE, (payload: TerminalResizePayload) => {
 
 socket.on(TERMINAL_CLOSE, (payload: TerminalClosePayload) => {
   closeSession(payload.sessionId);
+  sessionTmuxName.delete(payload.sessionId);
+  sessionInCopyMode.delete(payload.sessionId);
 });
 
 // --- Session lifecycle handlers ---

@@ -94,6 +94,53 @@ export async function killTmuxSession(name: string): Promise<{ ok: boolean; erro
   }
 }
 
+/**
+ * Scroll a mirrored tmux session's pane via copy-mode — the only way to reach
+ * tmux history from an attached client (its alt-screen bypasses xterm's own
+ * scrollback). Returns whether the pane ends IN copy-mode, so the caller knows
+ * to auto-exit before forwarding typed input. `=name` forces exact matching.
+ */
+export async function scrollTmux(
+  name: string,
+  direction: 'up' | 'down' | 'exit'
+): Promise<{ inCopyMode: boolean }> {
+  const bin = resolveTmuxPath();
+  if (!bin) return { inCopyMode: false };
+  const target = `=${name}`;
+  const run = (args: string[]) => execFileAsync(bin, args, { timeout: 4000 }).catch(() => {});
+  const inMode = async () => {
+    try {
+      const { stdout } = await execFileAsync(bin, ['display-message', '-t', target, '-p', '#{pane_in_mode}'], { timeout: 3000 });
+      return stdout.trim() === '1';
+    } catch {
+      return false;
+    }
+  };
+
+  if (direction === 'exit') {
+    if (await inMode()) await run(['send-keys', '-t', target, '-X', 'cancel']);
+    return { inCopyMode: false };
+  }
+  if (direction === 'up') {
+    await run(['copy-mode', '-t', target]); // enter (or stay in) copy-mode
+    await run(['send-keys', '-t', target, '-X', 'halfpage-up']);
+    return { inCopyMode: true };
+  }
+  // down — only meaningful while scrolled up; auto-exit when back at the bottom
+  if (!(await inMode())) return { inCopyMode: false };
+  await run(['send-keys', '-t', target, '-X', 'halfpage-down']);
+  try {
+    const { stdout } = await execFileAsync(bin, ['display-message', '-t', target, '-p', '#{scroll_position}'], { timeout: 3000 });
+    if ((parseInt(stdout.trim(), 10) || 0) === 0) {
+      await run(['send-keys', '-t', target, '-X', 'cancel']);
+      return { inCopyMode: false };
+    }
+  } catch {
+    /* leave in copy-mode */
+  }
+  return { inCopyMode: true };
+}
+
 interface PaneInfo {
   session: string;
   pid: number;

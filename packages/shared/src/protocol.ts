@@ -89,6 +89,9 @@ export const TMUX_LIST_RESULT = 'tmux:list:result' as const;
 export const TMUX_KILL = 'tmux:kill' as const;
 // Agent -> Server -> Client
 export const TMUX_KILL_RESULT = 'tmux:kill:result' as const;
+// Client -> Server -> Agent: scroll a mirrored tmux pane via copy-mode (the
+// alt-screen means xterm's own scrollback can't reach tmux history).
+export const TMUX_SCROLL = 'tmux:scroll' as const;
 
 // --- Payload types ---
 export interface TerminalOutputPayload {
@@ -313,6 +316,12 @@ export interface TmuxKillPayload {
   agentId?: string;
   name: string;
   requestId?: string;
+}
+
+export interface TmuxScrollPayload {
+  agentId?: string;
+  sessionId: string; // the terminal (PTY) session that mirrors a tmux session
+  direction: 'up' | 'down' | 'exit';
 }
 
 export interface TmuxKillResultPayload {

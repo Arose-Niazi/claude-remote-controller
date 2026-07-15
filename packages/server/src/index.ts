@@ -60,6 +60,7 @@ import {
   TMUX_LIST_RESULT,
   TMUX_KILL,
   TMUX_KILL_RESULT,
+  TMUX_SCROLL,
   AGENT_EXEC,
   AGENT_EXEC_RESULT,
   type FilesListPayload,
@@ -80,6 +81,7 @@ import {
   type TmuxListResultPayload,
   type TmuxKillPayload,
   type TmuxKillResultPayload,
+  type TmuxScrollPayload,
   type AgentExecPayload,
   type AgentExecResultPayload,
 } from '@crc/shared';
@@ -638,6 +640,16 @@ clientNs.on('connection', (socket) => {
     const rid = requestId || uuid();
     trackRpc(rid, socket.id, agentId);
     agentNs.to(agentSocketId).emit(TMUX_KILL, { requestId: rid, name });
+  });
+
+  // --- tmux scroll (client -> agent) ---
+  socket.on(TMUX_SCROLL, (payload: TmuxScrollPayload) => {
+    const { agentId, sessionId, direction } = payload;
+    if (!agentId || !sessionId || !direction) return;
+    if (!assertOwnsAgent(userId, agentId)) return;
+    const agentSocketId = getAgentSocketId(agentId);
+    if (!agentSocketId) return;
+    agentNs.to(agentSocketId).emit(TMUX_SCROLL, { sessionId, direction });
   });
 
   // --- File explorer relay (client -> agent) ---
