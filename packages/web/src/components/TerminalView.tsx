@@ -543,9 +543,16 @@ export default function TerminalView({ socket }: TerminalViewProps) {
     const fallback = window.setTimeout(() => {
       baselineLoadedRef.current = true;
     }, 5000);
+    // Safety valve: drop the guard entirely after 15s so a mis-baselined new
+    // session (e.g. its transcript existed before the baseline read) can never
+    // leave the view permanently stuck with nothing to latch onto.
+    const disarm = window.setTimeout(() => {
+      if (!convClaudeSessionRef.current) preexistingSessionsRef.current = null;
+    }, 15000);
     return () => {
       socket.off(CLAUDE_SESSIONS_RESULT, onResult);
       window.clearTimeout(fallback);
+      window.clearTimeout(disarm);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [socket, agentId, initialCmd]);

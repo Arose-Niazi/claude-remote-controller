@@ -57,6 +57,7 @@ import { logger } from './logger.js';
 import { installClaudeHooks, normalizeClaudeHook, lastAssistantSummary } from './claude-plugin-installer.js';
 import { startLocalControl } from './local-control.js';
 import { ensurePtyHelperExecutable } from './pty-helper-fix.js';
+import { acquireSingleInstanceLock } from './single-instance.js';
 import { listTmuxSessions, buildTmuxLaunch, killTmuxSession } from './tmux.js';
 import { buildHeartbeat } from './heartbeat.js';
 import { listDirectory, downloadFile } from './file-explorer.js';
@@ -83,6 +84,18 @@ if (!isConfigured()) {
 
 const config = loadConfig();
 logger.info({ agentId: config.agentId, serverUrl: config.serverUrl }, 'Starting agent');
+
+// Refuse to run a second agent on this machine — duplicates share an agentId
+// and the server routes terminal I/O to whichever registered last, so input
+// silently lands on the wrong process.
+const lock = acquireSingleInstanceLock();
+if (!lock.ok) {
+  console.error(
+    `Another crc-agent is already running on this machine (PID ${lock.pid}). ` +
+      `Stop it first, or set CRC_ALLOW_MULTIPLE=1 to override.`
+  );
+  process.exit(1);
+}
 
 // node-pty's spawn-helper often loses its execute bit on npm install — restore
 // it before any PTY is spawned, or pty.fork() fails with "posix_spawnp failed".
