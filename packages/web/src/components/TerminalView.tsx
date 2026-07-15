@@ -9,6 +9,8 @@ import {
   TERMINAL_OUTPUT,
   CLAUDE_CONV_READ,
   CLAUDE_CONV_DATA,
+  CLAUDE_SESSIONS_LIST,
+  CLAUDE_SESSIONS_RESULT,
   FILES_DOWNLOAD,
   FILES_DOWNLOAD_READY,
   FILES_DOWNLOAD_ERROR,
@@ -18,6 +20,7 @@ import { showBrowserNotification, playSound, flashTitle, claudeDedup } from '../
 import type {
   ClaudeConvMessage,
   ClaudeConvDataPayload,
+  ClaudeSessionsResultPayload,
   FilesDownloadReadyPayload,
   FilesDownloadErrorPayload,
 } from '@crc/shared';
@@ -76,6 +79,15 @@ export default function TerminalView({ socket }: TerminalViewProps) {
   const convLineRef = useRef(0);
   const convProjectRef = useRef<string | null>(null);
   const convClaudeSessionRef = useRef<string | null>(null);
+  // For a freshly-launched `claude` (no --resume): the set of session ids that
+  // already existed at launch. The conversation poller must not latch onto one
+  // of these (that's an OLD chat) — it waits for the new session this launch
+  // creates. null means "not a fresh launch" (resume/reattach), so no guard.
+  const preexistingSessionsRef = useRef<Set<string> | null>(null);
+  // Whether the pre-existing-session baseline has loaded (or timed out). Until
+  // then, a fresh launch defers latching so it can't grab an old chat that the
+  // first poll returns before the baseline arrives.
+  const baselineLoadedRef = useRef(false);
   // Live mirror of the terminal sessionId (null for a brand-new session until
   // the server assigns one). Read this inside long-lived listeners so we don't
   // capture a stale null from when the effect was first set up.
@@ -502,8 +514,41 @@ export default function TerminalView({ socket }: TerminalViewProps) {
       if (pathMatch) convProjectRef.current = pathMatch[1].replace(/\\\\/g, '\\');
       const resumeMatch = initialCmd.match(/--resume\s+([a-f0-9-]+)/);
       if (resumeMatch) convClaudeSessionRef.current = resumeMatch[1];
+      // Fresh `claude` launch (not a resume): mark it so the poller waits for
+      // the NEW session instead of showing whichever chat is currently newest.
+      if (!resumeMatch && /\bclaude\b/.test(initialCmd)) {
+        preexistingSessionsRef.current = new Set();
+      }
     }
   }, [initialCmd]);
+
+  // Baseline the project's existing Claude session ids so the poller can tell
+  // this launch's new session apart from pre-existing ones (clock-skew safe —
+  // we compare ids, not timestamps).
+  useEffect(() => {
+    if (!socket || !agentId || !preexistingSessionsRef.current) return;
+    const project = convProjectRef.current;
+    if (!project) return;
+    const onResult = (p: ClaudeSessionsResultPayload) => {
+      if (p.agentId && p.agentId !== agentId) return;
+      if (preexistingSessionsRef.current && !baselineLoadedRef.current) {
+        preexistingSessionsRef.current = new Set((p.sessions || []).map((s) => s.sessionId));
+        baselineLoadedRef.current = true;
+      }
+    };
+    socket.on(CLAUDE_SESSIONS_RESULT, onResult);
+    socket.emit(CLAUDE_SESSIONS_LIST, { agentId, projectPath: project });
+    // Fallback: if the baseline never arrives, stop deferring after 5s so the
+    // conversation still shows (worst case it may latch onto the latest chat).
+    const fallback = window.setTimeout(() => {
+      baselineLoadedRef.current = true;
+    }, 5000);
+    return () => {
+      socket.off(CLAUDE_SESSIONS_RESULT, onResult);
+      window.clearTimeout(fallback);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [socket, agentId, initialCmd]);
 
   // Mirror the live sessionId into a ref so long-lived listeners (e.g. the
   // conv-data handler, set up before the server assigns an id to a new
@@ -538,12 +583,22 @@ export default function TerminalView({ socket }: TerminalViewProps) {
 
     const handleConvData = (payload: ClaudeConvDataPayload) => {
       if (payload.agentId !== agentId) return;
+      // On a fresh `claude` launch, ignore data from a session that already
+      // existed at launch — it's an old chat that merely happens to be the
+      // newest transcript until our new session writes its first line.
+      const preexisting = preexistingSessionsRef.current;
+      if (preexisting && !convClaudeSessionRef.current) {
+        // Defer until the baseline is known, then skip pre-existing (old) chats.
+        if (!baselineLoadedRef.current) return;
+        if (payload.sessionId && preexisting.has(payload.sessionId)) return;
+      }
       // Lock onto the session ID once discovered (for new sessions without --resume).
       // Read the terminal sessionId from the ref so a session that was 'new'
       // when this listener was registered still gets the localStorage write
       // once the server assigns it an id.
       if (payload.sessionId && !convClaudeSessionRef.current) {
         convClaudeSessionRef.current = payload.sessionId;
+        preexistingSessionsRef.current = null; // locked — guard no longer needed
         const sid = sessionIdRef.current;
         if (sid) localStorage.setItem(`conv-claude-session-${sid}`, payload.sessionId);
       }
@@ -780,29 +835,27 @@ export default function TerminalView({ socket }: TerminalViewProps) {
     if (convProjectRef.current) {
       setPendingSent((prev) => [...prev, composeText]);
     }
-    // Send line by line to avoid PTY buffer overflow
-    // Each line is typed, then \n to add newline, final \r to submit
+    // Send line by line to avoid PTY buffer overflow. Each line is typed, then
+    // \n to add a newline; the final Enter is sent SEPARATELY after a delay.
+    // Claude Code 2.x's paste heuristic folds an Enter arriving in the same
+    // burst as the text into the input as a newline instead of submitting, so
+    // the prompt would sit there unsent — the gap makes it a real submit.
     const lines = composeText.split('\n');
-    if (lines.length > 1) {
-      let i = 0;
-      const sendLine = () => {
-        write(lines[i]);
-        i++;
-        if (i < lines.length) {
-          // Newline between lines (not submit)
-          setTimeout(() => {
-            write('\n');
-            setTimeout(sendLine, 30);
-          }, 10);
-        } else {
-          // Submit
-          setTimeout(() => write('\r'), 30);
-        }
-      };
-      sendLine();
-    } else {
-      write(composeText + '\r');
-    }
+    let i = 0;
+    const sendLine = () => {
+      write(lines[i]);
+      i++;
+      if (i < lines.length) {
+        // Newline between lines (not submit)
+        setTimeout(() => {
+          write('\n');
+          setTimeout(sendLine, 30);
+        }, 10);
+      } else {
+        setTimeout(() => write('\r'), 120); // submit, clearly separated
+      }
+    };
+    sendLine();
     setComposeText('');
     lastMirroredRef.current = '';
     // Sending ends the interaction the mirror was armed for — don't let the
