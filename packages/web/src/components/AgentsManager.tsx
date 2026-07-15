@@ -30,7 +30,7 @@ function base64UrlEncode(input: string): string {
 }
 
 function buildEnrollToken(agentId: string, secret: string): string {
-  const wsUrl = (location.protocol === 'https:' ? 'wss' : 'ws') + '//' + location.host;
+  const wsUrl = (location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + location.host;
   return base64UrlEncode(JSON.stringify({ v: 1, serverUrl: wsUrl, agentId, secret }));
 }
 
@@ -134,7 +134,7 @@ export default function AgentsManager({ onClose }: AgentsManagerProps) {
 
   const enrollToken = created ? buildEnrollToken(created.agentId, created.secret) : '';
   const installCmd = `npm i -g cli-remote-agent && crc-agent setup --token ${enrollToken}`;
-  const wsUrl = (location.protocol === 'https:' ? 'wss' : 'ws') + '//' + location.host;
+  const wsUrl = (location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + location.host;
 
   return (
     <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">

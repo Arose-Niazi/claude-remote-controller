@@ -45,7 +45,22 @@ function ask(rl: readline.Interface, question: string): Promise<string> {
   return new Promise((resolve) => rl.question(question, (answer) => resolve(answer)));
 }
 
+// Repair/validate the server URL before it's persisted — a historical web-UI
+// bug emitted "wss//host" (missing colon), which the agent then silently
+// connect-looped on. Fails loudly here instead.
+function normalizeServerUrl(url: string): string {
+  const fixed = url.trim().replace(/^(wss?|https?)\/\//i, (_m, proto) => `${proto.toLowerCase()}://`);
+  try {
+    const u = new URL(fixed);
+    if (!/^(wss?:|https?:)$/.test(u.protocol)) throw new Error('unsupported protocol');
+  } catch {
+    throw new Error(`Invalid server URL: "${url}" (expected e.g. wss://crc.example.com)`);
+  }
+  return fixed;
+}
+
 function writeConfig(cfg: AgentConfig): void {
+  cfg.serverUrl = normalizeServerUrl(cfg.serverUrl);
   fs.mkdirSync(CONFIG_DIR, { recursive: true });
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2));
   console.log(`Saved. Start the agent with: crc-agent`);
