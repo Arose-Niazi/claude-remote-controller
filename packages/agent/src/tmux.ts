@@ -1,5 +1,7 @@
 import { execFile } from 'child_process';
 import { promisify } from 'util';
+import fs from 'fs';
+import path from 'path';
 import type { TmuxSessionInfo } from '@crc/shared';
 import { getLiveClaudeSessions, getPidParents, isDescendantOf } from './claude-live.js';
 
@@ -7,10 +9,44 @@ const execFileAsync = promisify(execFile);
 
 const IS_WIN = process.platform === 'win32';
 
+let cachedTmuxPath: string | null | undefined;
+
+/**
+ * Absolute path to the tmux binary, resolved from the agent's PATH plus the
+ * usual Homebrew/MacPorts locations a minimal (e.g. launchd/systemd) PATH
+ * misses. Both listing AND launching go through this, so a session that shows
+ * up in the list can always be attached — the previous split (list via the
+ * agent's PATH, attach via a `zsh -l -c` login shell) meant a user who set
+ * PATH in ~/.zshrc saw sessions that then failed to mirror with a blank pane.
+ * Returns null only when tmux truly isn't installed.
+ */
+export function resolveTmuxPath(): string | null {
+  if (cachedTmuxPath !== undefined) return cachedTmuxPath;
+  const dirs = (process.env.PATH || '').split(path.delimiter).filter(Boolean);
+  for (const extra of ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin', '/opt/local/bin']) {
+    if (!dirs.includes(extra)) dirs.push(extra);
+  }
+  for (const dir of dirs) {
+    const candidate = path.join(dir, 'tmux');
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      cachedTmuxPath = candidate;
+      return candidate;
+    } catch {
+      /* keep looking */
+    }
+  }
+  cachedTmuxPath = null;
+  return null;
+}
+
 // On Windows there's no native tmux, but WSL has it. Run tmux through the
 // default WSL distro so we can mirror sessions the user runs in Warp's WSL tab.
+// On POSIX use the absolute path (falls back to bare 'tmux') so listing and
+// launching resolve identically.
 function tmuxCmd(args: string[]): { file: string; args: string[] } {
-  return IS_WIN ? { file: 'wsl.exe', args: ['tmux', ...args] } : { file: 'tmux', args };
+  if (IS_WIN) return { file: 'wsl.exe', args: ['tmux', ...args] };
+  return { file: resolveTmuxPath() || 'tmux', args };
 }
 
 /**
@@ -115,21 +151,23 @@ async function enrichWithPanesAndClaude(sessions: TmuxSessionInfo[]): Promise<vo
   }
 }
 
-/** Shell-quote a value for safe single-quoted interpolation. */
-function shq(v: string): string {
-  return `'${v.replace(/'/g, `'\\''`)}'`;
-}
-
 /**
  * Build the process a PTY runs to attach (or create) a shared tmux session.
  * `-A` attaches if it exists, else creates it (running `launch` if given).
- * Returns a {file, args} spec spawned directly (no wrapping shell).
+ *
+ * POSIX: spawn the tmux binary DIRECTLY via its absolute path (resolveTmuxPath,
+ * the same resolution listing uses) rather than through a `shell -l -c`
+ * wrapper. The old wrapper depended on the login shell's PATH, which misses
+ * tmux when the user configured PATH in ~/.zshrc (not ~/.zprofile) — the
+ * session listed fine but mirroring spawned a dead pane. tmux inherits the
+ * agent's env, so a `launch` command (e.g. `cd … && exec claude`) still finds
+ * claude on the agent's PATH. Returns null when tmux isn't installed, so the
+ * caller can show a real error instead of a blank canvas.
  */
 export function buildTmuxLaunch(
   name: string,
-  launch: string | undefined,
-  shell: string
-): { file: string; args: string[] } {
+  launch: string | undefined
+): { file: string; args: string[] } | null {
   const trimmed = launch && launch.trim() ? launch.trim() : undefined;
 
   if (IS_WIN) {
@@ -139,9 +177,15 @@ export function buildTmuxLaunch(
     return { file: 'wsl.exe', args };
   }
 
-  // POSIX: run via a login shell so PATH (e.g. Homebrew tmux) is loaded, and
-  // set aggressive-resize so the PC's view doesn't shrink to the phone's size.
-  let cmd = `tmux set-option -g aggressive-resize on 2>/dev/null; exec tmux new-session -A -s ${shq(name)}`;
-  if (trimmed) cmd += ` ${shq(trimmed)}`;
-  return { file: shell, args: ['-l', '-c', cmd] };
+  const tmuxBin = resolveTmuxPath();
+  if (!tmuxBin) return null;
+
+  // Best-effort: keep the PC's view from shrinking to the phone's size.
+  execFileAsync(tmuxBin, ['set-option', '-g', 'aggressive-resize', 'on'], { timeout: 4000 }).catch(
+    () => {}
+  );
+
+  const args = ['new-session', '-A', '-s', name];
+  if (trimmed) args.push(trimmed);
+  return { file: tmuxBin, args };
 }

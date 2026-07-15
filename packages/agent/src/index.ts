@@ -57,7 +57,6 @@ import { logger } from './logger.js';
 import { installClaudeHooks, normalizeClaudeHook, lastAssistantSummary } from './claude-plugin-installer.js';
 import { startLocalControl } from './local-control.js';
 import { listTmuxSessions, buildTmuxLaunch, killTmuxSession } from './tmux.js';
-import { detectShell } from './shell.js';
 import { buildHeartbeat } from './heartbeat.js';
 import { listDirectory, downloadFile } from './file-explorer.js';
 import { getProfiles, connectVpn, disconnectVpn } from './vpn-manager.js';
@@ -171,7 +170,23 @@ socket.on(TERMINAL_OPEN, (payload: TerminalOpenPayload) => {
 
   // If a tmux session was requested, attach (or create) it so the session is
   // shared with Warp/tmux on the PC (via WSL on Windows, native tmux elsewhere).
-  const launchSpec = tmux ? buildTmuxLaunch(tmux, launch, detectShell(config.shell)) : undefined;
+  let launchSpec: { file: string; args: string[] } | undefined;
+  if (tmux) {
+    const spec = buildTmuxLaunch(tmux, launch);
+    if (!spec) {
+      // tmux isn't installed — show a readable error instead of a blank pane.
+      const msg =
+        '\r\n\x1b[31mtmux is not installed on this machine.\x1b[0m\r\n' +
+        'Install it to use tmux mirroring:\r\n' +
+        '  macOS:  brew install tmux\r\n' +
+        '  Linux:  sudo apt install tmux  (or your package manager)\r\n\r\n';
+      socket.emit(TERMINAL_OUTPUT, { sessionId, data: msg });
+      socket.emit(TERMINAL_EXIT, { sessionId, exitCode: 1 });
+      logger.warn({ sessionId, tmux }, 'tmux launch requested but tmux not found');
+      return;
+    }
+    launchSpec = spec;
+  }
 
   createTerminalSession(
     sessionId,
