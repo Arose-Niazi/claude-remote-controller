@@ -120,6 +120,15 @@ export default function SessionManager({ socket }: SessionManagerProps) {
     navigate(`/terminal/${agentId}/new?tmux=${encodeURIComponent(name)}`);
   }
 
+  function handleNewTmux() {
+    const raw = window.prompt('New tmux session name (e.g. the project you\'ll work on):');
+    if (!raw || !raw.trim()) return;
+    const name = raw.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
+    navigate(
+      `/terminal/${agentId}/new?tmux=${encodeURIComponent(name)}&launch=${encodeURIComponent('claude')}`
+    );
+  }
+
   function handleTmuxKill(name: string) {
     if (
       !window.confirm(
@@ -427,8 +436,16 @@ export default function SessionManager({ socket }: SessionManagerProps) {
 
       {tmuxSessions.length > 0 && (
         <div className="mt-6">
-          <div className="text-xs font-medium text-text-muted uppercase tracking-wider mb-2">
-            Warp / tmux on this machine
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-xs font-medium text-text-muted uppercase tracking-wider">
+              Warp / tmux on this machine
+            </div>
+            <button
+              onClick={handleNewTmux}
+              className="text-xs px-2.5 py-0.5 bg-surface-overlay hover:bg-surface-overlay/80 border border-border-subtle text-text-secondary rounded-lg transition-colors"
+            >
+              + New
+            </button>
           </div>
           <div className="space-y-3">
             {tmuxSessions.map((s) => (

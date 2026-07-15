@@ -71,6 +71,18 @@ export default function ClaudeSessions({ socket, agentId, onClose }: ClaudeSessi
     navigate(`/terminal/${agentId}/new?cmd=${encodeURIComponent(cmd)}`);
   }
 
+  // Start (or attach — tmux -A semantics) a per-project tmux session running
+  // Claude in that project's folder. Distinct names let several projects run
+  // side by side and stay mirrorable from the session list.
+  function handleNewClaudeTmux(projectPath: string) {
+    const base = projectPath.split('/').filter(Boolean).pop() || 'claude';
+    const name = base.toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
+    const launch = `cd ${JSON.stringify(projectPath)} && exec claude`;
+    navigate(
+      `/terminal/${agentId}/new?tmux=${encodeURIComponent(name)}&launch=${encodeURIComponent(launch)}`
+    );
+  }
+
   // Group sessions by project
   const grouped = new Map<string, ClaudeSessionInfo[]>();
   for (const s of sessions) {
@@ -134,12 +146,21 @@ export default function ClaudeSessions({ socket, agentId, onClose }: ClaudeSessi
               {/* Project header */}
               <div className="flex items-center justify-between px-3 py-2 bg-surface-raised/50">
                 <span className="text-xs font-medium text-claude truncate">{projectName(path)}</span>
-                <button
-                  onClick={() => handleNewClaude(path)}
-                  className="text-xs px-2.5 py-0.5 bg-accent hover:bg-accent-hover text-white rounded-lg flex-shrink-0 ml-2 transition-colors"
-                >
-                  New
-                </button>
+                <div className="flex gap-1.5 flex-shrink-0 ml-2">
+                  <button
+                    onClick={() => handleNewClaudeTmux(path)}
+                    className="text-xs px-2.5 py-0.5 bg-surface-overlay hover:bg-surface-overlay/80 border border-border-subtle text-text-secondary rounded-lg transition-colors"
+                    title="Start Claude here inside a named tmux session (shared with Warp)"
+                  >
+                    tmux
+                  </button>
+                  <button
+                    onClick={() => handleNewClaude(path)}
+                    className="text-xs px-2.5 py-0.5 bg-accent hover:bg-accent-hover text-white rounded-lg transition-colors"
+                  >
+                    New
+                  </button>
+                </div>
               </div>
 
               {/* Sessions */}
