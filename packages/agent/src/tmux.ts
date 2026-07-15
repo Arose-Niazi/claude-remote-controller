@@ -106,7 +106,11 @@ export async function scrollTmux(
 ): Promise<{ inCopyMode: boolean }> {
   const bin = resolveTmuxPath();
   if (!bin) return { inCopyMode: false };
-  const target = `=${name}`;
+  // NB: pane-targeting commands (copy-mode/send-keys/display-message) take a
+  // target-PANE; the `=name` exact-session prefix is only valid for session
+  // targets (kill-session) and makes these fail with "can't find pane". A bare
+  // session name resolves to its active pane (exact match wins over prefixes).
+  const target = name;
   const run = (args: string[]) => execFileAsync(bin, args, { timeout: 4000 }).catch(() => {});
   const inMode = async () => {
     try {
@@ -122,7 +126,8 @@ export async function scrollTmux(
     return { inCopyMode: false };
   }
   if (direction === 'up') {
-    await run(['copy-mode', '-t', target]); // enter (or stay in) copy-mode
+    // Enter copy-mode only if not already in it — re-entering resets to bottom.
+    if (!(await inMode())) await run(['copy-mode', '-t', target]);
     await run(['send-keys', '-t', target, '-X', 'halfpage-up']);
     return { inCopyMode: true };
   }
