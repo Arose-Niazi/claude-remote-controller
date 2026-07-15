@@ -156,6 +156,10 @@ export class PtySession {
     }
   }
 
+  get pid(): number {
+    return this.pty.pid;
+  }
+
   write(data: string): void {
     this.pty.write(data);
   }

@@ -15,6 +15,7 @@ const LIVE_SESSIONS_DIR = path.join(os.homedir(), '.claude', 'sessions');
 export interface LiveClaudeSession {
   pid: number;
   cwd: string;
+  sessionId?: string;
   name?: string;
   status?: string;
   updatedAt?: number;
@@ -44,6 +45,7 @@ export function getLiveClaudeSessions(): LiveClaudeSession[] {
       out.push({
         pid: obj.pid,
         cwd: typeof obj.cwd === 'string' ? obj.cwd : '',
+        sessionId: typeof obj.sessionId === 'string' ? obj.sessionId : undefined,
         name: typeof obj.name === 'string' ? obj.name : undefined,
         status: typeof obj.status === 'string' ? obj.status : undefined,
         updatedAt: typeof obj.updatedAt === 'number' ? obj.updatedAt : undefined,
@@ -84,4 +86,23 @@ export function isDescendantOf(
     cur = parents.get(cur);
   }
   return false;
+}
+
+/**
+ * The Claude Code session id of the `claude` process running inside the given
+ * terminal PTY (a descendant of ptyPid). Lets the conversation view lock onto
+ * the EXACT session this terminal launched, instead of guessing the project's
+ * newest transcript — which is wrong when another Claude runs in that project.
+ * Returns null if no live Claude is found under the PTY yet.
+ */
+export async function findClaudeSessionForPtyPid(ptyPid: number): Promise<string | null> {
+  const live = getLiveClaudeSessions().filter((s) => s.sessionId);
+  if (live.length === 0) return null;
+  const parents = await getPidParents();
+  // Prefer the most recently updated matching session (getLiveClaudeSessions
+  // returns oldest-first, so scan from the end).
+  for (let i = live.length - 1; i >= 0; i--) {
+    if (isDescendantOf(live[i].pid, ptyPid, parents)) return live[i].sessionId!;
+  }
+  return null;
 }

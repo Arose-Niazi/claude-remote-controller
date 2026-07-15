@@ -238,6 +238,11 @@ export interface ClaudeConvReadPayload {
   projectPath: string;
   sessionId?: string;
   afterLine?: number;
+  // The terminal (PTY) session this conversation belongs to. When set and no
+  // explicit claude sessionId is known, the agent resolves the exact Claude
+  // session running inside this terminal (by process ancestry) instead of
+  // guessing the project's newest transcript.
+  terminalSessionId?: string;
 }
 
 export interface ClaudeConvDataPayload {

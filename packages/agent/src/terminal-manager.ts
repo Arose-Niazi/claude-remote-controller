@@ -32,6 +32,10 @@ export function createTerminalSession(
   logger.info({ sessionId, cols, rows }, 'PTY session created');
 }
 
+export function getSessionPid(sessionId: string): number | undefined {
+  return sessions.get(sessionId)?.pid;
+}
+
 export function writeToSession(sessionId: string, data: string): void {
   sessions.get(sessionId)?.write(data);
 }

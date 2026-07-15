@@ -74,8 +74,10 @@ import {
   detachSession,
   attachSession,
   getAliveSessionIds,
+  getSessionPid,
   reapDetachedSessions,
 } from './terminal-manager.js';
+import { findClaudeSessionForPtyPid } from './claude-live.js';
 
 if (!isConfigured()) {
   console.error('No agent configured. Run: crc-agent setup');
@@ -345,7 +347,24 @@ socket.on(AGENT_EXEC, async (payload: AgentExecPayload) => {
 // --- Claude Conversation handler ---
 socket.on(CLAUDE_CONV_READ, async (payload: ClaudeConvReadPayload) => {
   try {
-    const result = await readConversation(payload.projectPath, payload.afterLine || 0, payload.sessionId);
+    let sessionId = payload.sessionId;
+    // No explicit session, but the client named the terminal: never guess the
+    // project's "latest" transcript (that showed a DIFFERENT active chat when
+    // another Claude runs in the same project). Try to resolve the exact Claude
+    // in this terminal by process ancestry; if it can't be pinned down yet
+    // (Claude still booting, or running inside tmux), return empty so the view
+    // waits — the web locks on precisely once Claude's session_start OSC 777
+    // arrives with the real id.
+    if (!sessionId && payload.terminalSessionId) {
+      const ptyPid = getSessionPid(payload.terminalSessionId);
+      const resolved = ptyPid ? await findClaudeSessionForPtyPid(ptyPid) : null;
+      if (!resolved) {
+        socket.emit(CLAUDE_CONV_DATA, { sessionId: '', messages: [], totalLines: 0 });
+        return;
+      }
+      sessionId = resolved;
+    }
+    const result = await readConversation(payload.projectPath, payload.afterLine || 0, sessionId);
     if (result) {
       socket.emit(CLAUDE_CONV_DATA, {
         sessionId: result.sessionId,
