@@ -6,11 +6,18 @@ html, body, #root {
   height: 100%;
   margin: 0;
   padding: 0;
+  /* Stop the browser's pull-to-refresh and bounce/overscroll — a downward
+     terminal drag at the top would otherwise reload the page mid-scroll. */
+  overscroll-behavior: none;
 }
 
 body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  /* Belt-and-suspenders: never let the page itself scroll/refresh; scrolling
+     happens inside app panes (terminal, chat, lists). */
+  overflow: hidden;
+  overscroll-behavior-y: none;
 }
 
 /* Scrollbar styling */

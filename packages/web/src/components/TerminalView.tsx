@@ -1025,6 +1025,9 @@ export default function TerminalView({ socket }: TerminalViewProps) {
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}
+        // For tmux mirrors the drag is ours (forwarded to Claude) — take the
+        // gesture from the browser so it can't pull-to-refresh or overscroll.
+        style={isTmuxMirror ? { touchAction: 'none' } : undefined}
       >
         {/* xterm.js terminal — visible in TTY mode or when no conversation */}
         <div
