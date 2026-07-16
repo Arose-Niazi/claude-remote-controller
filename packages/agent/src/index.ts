@@ -60,6 +60,7 @@ import { installClaudeHooks, normalizeClaudeHook, lastAssistantSummary } from '.
 import { startLocalControl } from './local-control.js';
 import { ensurePtyHelperExecutable } from './pty-helper-fix.js';
 import { acquireSingleInstanceLock } from './single-instance.js';
+import { keepAwake } from './keep-awake.js';
 import { listTmuxSessions, buildTmuxLaunch, killTmuxSession, scrollTmux } from './tmux.js';
 import { buildHeartbeat } from './heartbeat.js';
 import { listDirectory, downloadFile } from './file-explorer.js';
@@ -104,6 +105,10 @@ if (!lock.ok) {
 // node-pty's spawn-helper often loses its execute bit on npm install — restore
 // it before any PTY is spawned, or pty.fork() fails with "posix_spawnp failed".
 ensurePtyHelperExecutable();
+
+// Keep the Mac awake (no idle sleep) so the connection survives — lid-close and
+// explicit sleep still work. macOS only; CRC_ALLOW_SLEEP=1 opts out.
+keepAwake();
 
 // --- Process-level safety nets: keep the agent (and its PTYs) alive on unexpected errors ---
 process.on('unhandledRejection', (reason) => {

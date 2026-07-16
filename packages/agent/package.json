@@ -1,6 +1,6 @@
 {
   "name": "cli-remote-agent",
-  "version": "1.0.13",
+  "version": "1.0.14",
   "description": "Remote-control agent for Claude Remote Controller: exposes a terminal, file explorer, and Claude Code session bridge on this machine to your self-hosted CRC server.",
   "license": "MIT",
   "repository": {
